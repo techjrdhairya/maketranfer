@@ -1,0 +1,74 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile containing identity metadata",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 320 },
+        "displayName": { "type": "string", "maxLength": 128 },
+        "photoURL": { "type": "string", "maxLength": 1024 },
+        "createdAt": { "type": "string" },
+        "lastLoginAt": { "type": "string" }
+      },
+      "required": ["uid", "email"]
+    },
+    "UserDocument": {
+      "title": "UserDocument",
+      "description": "User uploaded document reference stored in cloud Firestore",
+      "type": "object",
+      "properties": {
+        "slug": { "type": "string", "maxLength": 128 },
+        "originalName": { "type": "string", "maxLength": 256 },
+        "fileSize": { "type": "number" },
+        "mimeType": { "type": "string", "maxLength": 128 },
+        "uploadedAt": { "type": "string" },
+        "managementToken": { "type": "string", "maxLength": 128 },
+        "hasPassword": { "type": "boolean" },
+        "downloadCount": { "type": "number" },
+        "viewCount": { "type": "number" },
+        "isFolder": { "type": "boolean" },
+        "previewType": { "type": "string", "maxLength": 64 },
+        "status": { "type": "string", "maxLength": 32 },
+        "expiresAt": { "type": "string" }
+      },
+      "required": ["slug", "originalName", "fileSize", "mimeType", "uploadedAt"]
+    },
+    "PublicDocument": {
+      "title": "PublicDocument",
+      "description": "Public or shared document record for cross-session access",
+      "type": "object",
+      "properties": {
+        "slug": { "type": "string", "maxLength": 128 },
+        "originalFilename": { "type": "string", "maxLength": 256 },
+        "mimeType": { "type": "string", "maxLength": 128 },
+        "extension": { "type": "string", "maxLength": 32 },
+        "size": { "type": "number" },
+        "uploadedAt": { "type": "string" },
+        "status": { "type": "string", "maxLength": 32 },
+        "previewType": { "type": "string", "maxLength": 64 },
+        "hasPassword": { "type": "boolean" },
+        "viewCount": { "type": "number" },
+        "downloadCount": { "type": "number" },
+        "expiresAt": { "type": "string" }
+      },
+      "required": ["slug", "originalFilename", "mimeType", "size", "uploadedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Stores user account profile information"
+    },
+    "/users/{userId}/documents/{slug}": {
+      "schema": "UserDocument",
+      "description": "Stores documents uploaded by the authenticated user"
+    },
+    "/publicDocuments/{docId}": {
+      "schema": "PublicDocument",
+      "description": "Public shared document metadata for cross-session preview"
+    }
+  }
+}
+

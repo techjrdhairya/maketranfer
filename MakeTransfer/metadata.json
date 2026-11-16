@@ -1,0 +1,6 @@
+{
+  "name": "MakeTransfer",
+  "description": "Frictionless document and file sharing with in-browser previews, collision-safe links, passkeys, and instant transfers.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

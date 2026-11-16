@@ -1,0 +1,38 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Default deny all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // User profile matching
+    match /users/{userId} {
+      allow read, write: if isOwner(userId) && isValidId(userId);
+
+      // Subcollection for user's persistent documents
+      match /documents/{docId} {
+        allow read, write: if isOwner(userId);
+      }
+    }
+
+    // Public shared document records and file chunks (backed by storage and cross-session persistence)
+    match /publicDocuments/{document=**} {
+      allow read, write: if true;
+    }
+  }
+}
+
