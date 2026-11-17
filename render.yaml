@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: maketransfer-api
+    runtime: node
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: APP_URL
+        value: https://maketransfer.web.app
+      - key: SESSION_SECRET
+        generateValue: true
