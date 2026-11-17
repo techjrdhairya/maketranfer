@@ -6,7 +6,7 @@ Spark plan = static hosting + Firestore only (no Cloud Run / Cloud Functions). M
 Node backend for uploads, passwords and zip downloads, so:
 
     Browser -> maketransfer.web.app (Firebase Hosting, static site)
-            -> https://maketransfer-api.onrender.com (Node server, Render free plan)
+            -> https://maketranfer.onrender.com (Node server, Render free plan)
             -> Firestore in makebytechd (files and links are stored here, so nothing is lost on restart)
 
 ## A. One-time setup
@@ -19,7 +19,7 @@ npm install -g firebase-tools
 firebase login
 ```
 3. Backend on Render (render.com, free): New > Blueprint > pick this repo (it reads `render.yaml`),
-   or New > Web Service with: Build `npm install && npm run build`, Start `npm start`, and env vars
+   or New > Web Service with: Build `npm install --include=dev && npm run build`, Start `npm start`, and env vars
    `NODE_ENV=production`, `APP_URL=https://maketransfer.web.app`, `SESSION_SECRET=<long random string>`.
    Name the service `maketransfer-api`. If Render gives a different URL, put it in `.env.production`
    as `VITE_API_BASE_URL`.

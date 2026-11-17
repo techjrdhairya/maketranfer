@@ -7,8 +7,6 @@ interface AuthContextType {
   user: User | null;
   isGuest: boolean;
   loading: boolean;
-  showAuthModal: boolean;
-  setShowAuthModal: (show: boolean) => void;
   signInWithGoogle: () => Promise<void>;
   continueAsGuest: () => void;
   signOutUser: () => Promise<void>;
@@ -40,7 +38,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [user, setUser] = useState<User | null>(null);
   const [isGuest, setIsGuest] = useState<boolean>(getInitialGuestState);
   const [loading, setLoading] = useState<boolean>(true);
-  const [showAuthModal, setShowAuthModal] = useState<boolean>(false);
 
   useEffect(() => {
     testConnection();
@@ -52,7 +49,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (currentUser) {
         setIsGuest(false);
         persistGuestState(false);
-        setShowAuthModal(false);
 
         // Sync local guest uploads to Firestore under this user account
         try {
@@ -99,12 +95,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         } catch (e) {
           console.warn('Sync with cloud failed:', e);
         }
-      } else {
-        const wasGuest = localStorage.getItem(GUEST_STORAGE_KEY) === 'true';
-        if (!wasGuest) {
-          // If neither logged in nor chosen guest mode, prompt auth modal
-          setShowAuthModal(true);
-        }
       }
     });
 
@@ -113,23 +103,18 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const signInWithGoogle = async () => {
     try {
-      setLoading(true);
       await signInWithPopup(auth, googleProvider);
       setIsGuest(false);
       persistGuestState(false);
-      setShowAuthModal(false);
     } catch (err: any) {
       console.error('Google Sign-In Error:', err);
       throw err;
-    } finally {
-      setLoading(false);
     }
   };
 
   const continueAsGuest = () => {
     setIsGuest(true);
     persistGuestState(true);
-    setShowAuthModal(false);
   };
 
   const signOutUser = async () => {
@@ -145,8 +130,6 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         user,
         isGuest,
         loading,
-        showAuthModal,
-        setShowAuthModal,
         signInWithGoogle,
         continueAsGuest,
         signOutUser,

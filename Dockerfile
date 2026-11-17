@@ -9,6 +9,8 @@ FROM node:22-slim
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package*.json ./
+# Reuse the node_modules that installed fine in the build stage.
+# (A second "npm install --omit=dev" breaks tsx's esbuild binary.)
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/public ./public

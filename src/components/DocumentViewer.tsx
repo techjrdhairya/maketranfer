@@ -317,7 +317,7 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ slug, onGoHome }
               Share any document instantly with MakeTransfer
             </h3>
             <p className="text-xs text-stone-300 mt-1">
-              Built by <strong>Dhairya Agrawal</strong> • Collision-safe public links, in-browser previews for PDFs/images/docs.
+              Collision-safe public links, in-browser previews for PDFs/images/docs.
             </p>
           </div>
         </div>

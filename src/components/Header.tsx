@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { navigateToSignIn } from '../lib/nav';
 import {
   FileUp,
   FolderLock,
@@ -31,7 +32,7 @@ export const Header: React.FC<HeaderProps> = ({
   onNavigateToSlug,
   currentSlug,
 }) => {
-  const { user, isGuest, setShowAuthModal, signOutUser } = useAuth();
+  const { user, isGuest, signOutUser } = useAuth();
   const [searchSlug, setSearchSlug] = useState('');
   const [uploadsCount, setUploadsCount] = useState(0);
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
@@ -118,14 +119,6 @@ export const Header: React.FC<HeaderProps> = ({
             </div>
           </button>
 
-          {/* Owner Mark */}
-          <div className="hidden lg:flex items-center space-x-1.5 pl-3 border-l border-stone-200 text-xs">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 ring-2 ring-emerald-100"></span>
-            <span className="text-stone-500 font-medium">Owner:</span>
-            <span className="font-semibold text-stone-800 bg-stone-100/90 px-2 py-0.5 rounded-md border border-stone-200/80">
-              Dhairya Agrawal
-            </span>
-          </div>
         </div>
 
         {/* Desktop Search Slug or Quick URL input */}
@@ -274,7 +267,7 @@ export const Header: React.FC<HeaderProps> = ({
             ) : (
               <button
                 id="btn-header-signin"
-                onClick={() => setShowAuthModal(true)}
+                onClick={navigateToSignIn}
                 className="inline-flex items-center space-x-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-bold text-stone-800 bg-white hover:bg-stone-50 border border-stone-300 rounded-xl shadow-2xs hover:border-stone-400 transition-all cursor-pointer"
               >
                 <svg className="w-3.5 h-3.5 shrink-0" viewBox="0 0 24 24">

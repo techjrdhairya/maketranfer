@@ -5,7 +5,8 @@ import { PublishPanel } from './components/PublishPanel';
 import { MultiPublishPanel } from './components/MultiPublishPanel';
 import { DocumentViewer } from './components/DocumentViewer';
 import { MyDocumentsDrawer } from './components/MyDocumentsDrawer';
-import { AuthModal } from './components/AuthModal';
+import { SignInPage } from './components/SignInPage';
+import { useAuth } from './context/AuthContext';
 import { Logo } from './components/Logo';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { UploadResponse } from './types';
@@ -30,6 +31,8 @@ export default function App() {
   const [multiUploads, setMultiUploads] = useState<UploadResponse[] | null>(null);
   const [isMyDocsOpen, setIsMyDocsOpen] = useState(false);
   const [sampleLoading, setSampleLoading] = useState(false);
+  const [isSignInRoute, setIsSignInRoute] = useState(false);
+  const { user, isGuest, loading: authLoading } = useAuth();
 
   // Parse path on initial load or popstate
   useEffect(() => {
@@ -37,6 +40,15 @@ export default function App() {
       const path = window.location.pathname;
       const searchParams = new URLSearchParams(window.location.search);
       const querySlug = searchParams.get('d');
+
+      if (path === '/signin') {
+        setIsSignInRoute(true);
+        setCurrentSlug(null);
+        setActiveUpload(null);
+        setMultiUploads(null);
+        return;
+      }
+      setIsSignInRoute(false);
 
       if (querySlug) {
         setCurrentSlug(querySlug);
@@ -65,6 +77,7 @@ export default function App() {
   }, []);
 
   const navigateToSlug = (slug: string) => {
+    setIsSignInRoute(false);
     setCurrentSlug(slug);
     setActiveUpload(null);
     setMultiUploads(null);
@@ -72,6 +85,7 @@ export default function App() {
   };
 
   const navigateHome = () => {
+    setIsSignInRoute(false);
     setCurrentSlug(null);
     setActiveUpload(null);
     setMultiUploads(null);
@@ -245,6 +259,23 @@ export default function App() {
     }
   };
 
+  // Already signed in: leave the sign-in page.
+  useEffect(() => {
+    if (user && isSignInRoute) navigateHome();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, isSignInRoute]);
+
+  // Sign-in page: shown at /signin, and on the home page for first-time visitors.
+  // Shared document links (/d/...) are always viewable without signing in.
+  const needsSignIn = !authLoading && !user && !isGuest && !currentSlug;
+  // Blank splash while Firebase works out whether someone is already signed in (avoids a flash).
+  if (authLoading && !isGuest && !currentSlug) {
+    return <div className="min-h-screen bg-stone-50" />;
+  }
+  if (isSignInRoute || needsSignIn) {
+    return <SignInPage onDone={navigateHome} />;
+  }
+
   return (
     <div className="min-h-screen flex flex-col bg-stone-50 text-stone-900 selection:bg-indigo-500 selection:text-white">
       {/* Top Navigation */}
@@ -286,9 +317,7 @@ export default function App() {
               <div className="text-center space-y-3">
                 <div className="inline-flex items-center space-x-2 px-3.5 py-1.5 bg-stone-200/80 border border-stone-300/90 rounded-full text-xs font-semibold text-stone-800 shadow-2xs">
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                  <span>Built & Owned by <strong>Dhairya Agrawal</strong></span>
-                  <span className="text-stone-400">•</span>
-                  <span className="text-stone-600">MakeTransfer Platform</span>
+                  <span>MakeTransfer Platform</span>
                 </div>
                 <h1 className="text-3xl sm:text-5xl font-extrabold text-stone-900 tracking-tight max-w-2xl mx-auto leading-tight">
                   Share any document in seconds with a unique link
@@ -385,9 +414,6 @@ export default function App() {
         onOpenDocument={navigateToSlug}
       />
 
-      {/* Authentication & Login Modal */}
-      <AuthModal />
-
       {/* Footer */}
       <footer className="border-t border-stone-200/80 bg-white/80 py-6 text-center text-xs text-stone-500">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
@@ -400,11 +426,6 @@ export default function App() {
                 MakeTransfer — Frictionless, Open Document Sharing
               </p>
             </div>
-            <span className="hidden sm:inline text-stone-300">•</span>
-            <span className="inline-flex items-center space-x-1.5 text-xs text-stone-600 bg-stone-100 px-2.5 py-0.5 rounded-full border border-stone-200 font-medium">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
-              <span>Owner: <strong>Dhairya Agrawal</strong></span>
-            </span>
           </div>
           <p className="text-stone-400">
             Files stored securely • Single bundle or individual links

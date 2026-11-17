@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { navigateToSignIn } from '../lib/nav';
 import QRCode from 'qrcode';
 import {
   X,
@@ -52,7 +53,7 @@ export const MyDocumentsDrawer: React.FC<MyDocumentsDrawerProps> = ({
   onClose,
   onOpenDocument,
 }) => {
-  const { user, isGuest, setShowAuthModal } = useAuth();
+  const { user, isGuest } = useAuth();
   const [documents, setDocuments] = useState<DocumentMetadata[]>([]);
   const [loading, setLoading] = useState(true);
   const [copiedSlug, setCopiedSlug] = useState<string | null>(null);
@@ -272,7 +273,7 @@ export const MyDocumentsDrawer: React.FC<MyDocumentsDrawerProps> = ({
                 </span>
               </div>
               <button
-                onClick={() => setShowAuthModal(true)}
+                onClick={() => { onClose(); navigateToSignIn(); }}
                 className="shrink-0 ml-2 px-2.5 py-1 bg-indigo-600 text-white rounded-lg text-[11px] font-bold hover:bg-stone-800 transition-colors shadow-2xs cursor-pointer"
               >
                 Sign In
@@ -601,7 +602,7 @@ export const MyDocumentsDrawer: React.FC<MyDocumentsDrawerProps> = ({
         {/* Footer */}
         <div className="p-4 border-t border-stone-200 bg-stone-50 text-center space-y-1">
           <p className="text-[11px] text-stone-600 font-medium">
-            MakeTransfer • Owned by <strong className="text-stone-900 font-bold">Dhairya Agrawal</strong>
+            MakeTransfer
           </p>
           <p className="text-[10px] text-stone-400">
             Files and management keys are stored securely on the server.
