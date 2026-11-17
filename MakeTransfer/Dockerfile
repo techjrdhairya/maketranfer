@@ -9,7 +9,7 @@ FROM node:22-slim
 WORKDIR /app
 ENV NODE_ENV=production
 COPY package*.json ./
-RUN npm install --omit=dev --no-audit --no-fund
+COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/public ./public
 COPY --from=build /app/firebase-applet-config.json ./firebase-applet-config.json
