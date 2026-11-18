@@ -5,6 +5,7 @@ import { generateSlug, generateManagementToken, isValidSlug } from './slug.js';
 import {
   persistDocumentToFirestore,
   deleteDocumentFromFirestore,
+  clearDeleted,
   loadDocumentsFromFirestore,
   fetchDocumentFromFirestore,
   restoreFileFromFirestore,
@@ -750,7 +751,8 @@ class StorageService {
       this.documents.delete(oldSlug);
       this.documents.delete(cleanSlug);
       this.documents.delete(slug);
-      deleteDocumentFromFirestore(oldSlug).catch(() => {});
+      deleteDocumentFromFirestore(oldSlug, doc.isFolder, doc.id).catch(() => {});
+      clearDeleted(sanitized);
       doc.slug = sanitized;
       this.documents.set(sanitized, doc);
     }
@@ -882,6 +884,18 @@ class StorageService {
     return undefined;
   }
 
+  // Hand a document over to someone else (device transfer): the old management token stops working
+  // and the original uploader no longer sees it in their own list.
+  public transferOwnership(slug: string): string | undefined {
+    const doc = this.getBySlug(slug);
+    if (!doc) return undefined;
+    doc.managementToken = generateManagementToken();
+    doc.ownerClientId = undefined;
+    this.saveToDisk(false);
+    this.persistDoc(doc);
+    return doc.managementToken;
+  }
+
   public getDocumentsByOwner(ownerClientId: string): StoredDocument[] {
     if (!ownerClientId) return [];
     const list: StoredDocument[] = [];
@@ -960,7 +974,8 @@ class StorageService {
       this.documents.delete(oldSlug);
       this.documents.delete(cleanSlug);
       this.documents.delete(slug);
-      deleteDocumentFromFirestore(oldSlug).catch(() => {});
+      deleteDocumentFromFirestore(oldSlug, doc.isFolder, doc.id).catch(() => {});
+      clearDeleted(sanitized);
       doc.slug = sanitized;
       this.documents.set(sanitized, doc);
     }
@@ -969,7 +984,15 @@ class StorageService {
       doc.originalFilename = updates.originalFilename.trim();
     }
 
-    if (updates.status) doc.status = updates.status;
+    if (updates.status) {
+      if (updates.status !== 'published' && updates.status !== 'unpublished') {
+        return { error: 'Invalid status. Use "published" or "unpublished".' };
+      }
+      if (updates.status === 'published' && doc.status !== 'published') {
+        doc.publishedAt = new Date().toISOString();
+      }
+      doc.status = updates.status;
+    }
     if (updates.description !== undefined) doc.description = updates.description;
     if (updates.expiresAt !== undefined) doc.expiresAt = updates.expiresAt;
     if (updates.maxDownloads !== undefined) doc.maxDownloads = updates.maxDownloads;
@@ -1018,10 +1041,11 @@ class StorageService {
       doc = await this.getBySlugAsync(cleanSlug);
     }
 
-    // Always attempt deleting from Firestore publicDocuments
-    deleteDocumentFromFirestore(cleanSlug, doc?.isFolder).catch(() => {});
+    // Remove from Firestore first (awaited, tombstoned, retried in background if it fails)
+    // so the document can never be restored from the cloud after "delete".
+    await deleteDocumentFromFirestore(cleanSlug, doc?.isFolder, doc?.id);
     if (doc?.slug && doc.slug !== cleanSlug) {
-      deleteDocumentFromFirestore(doc.slug, doc.isFolder).catch(() => {});
+      await deleteDocumentFromFirestore(doc.slug, doc.isFolder, doc.id);
     }
 
     if (!doc) {

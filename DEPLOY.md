@@ -46,3 +46,31 @@ npm run dev        # http://localhost:3000 (frontend + backend together)
 - `publicDocuments` in the rules is open because the server uses the client SDK. Moving the server to the
   Firebase Admin SDK would let you lock it down.
 - Firestore free quota (Spark): 1 GiB stored, 20k writes and 50k reads per day. Big files use many writes.
+
+## Keeping the free Render server awake
+- The server pings its own public URL (`/api/health`) every 14 minutes. Render provides the URL automatically
+  as `RENDER_EXTERNAL_URL`; set `KEEP_ALIVE_URL` only if you want to override it. Look for `[keep-alive]` in the logs.
+- The website also pings the server when it opens and every 14 minutes while a tab stays open, so the server
+  starts waking up before the first request.
+- Backup: add a free monitor at uptimerobot.com (HTTP, every 5 minutes) on `https://maketranfer.onrender.com/api/health`.
+- Render's free plan includes about 750 instance hours per month **shared by all free web services in your account**.
+  One always-on service uses about 744 hours. If MakeQR (or any other free service) also runs on Render, keeping both
+  awake all month exceeds the allowance and Render suspends services until the next month.
+
+## My Documents
+- The page is at `/documents` (header button "My Documents"). Drafts, published, unpublished, expired and
+  unavailable documents are shown with the status the server reports.
+- Deleting removes the file from the server and from Firestore (retried in the background if Firestore is slow),
+  and your browser/account records are only cleaned once the server confirms.
+
+## Devices (send to a device ID)
+- Page: `/devices` (header button "Devices"). Each browser gets an ID like `K7M-4QP` the first time it opens that page;
+  after that it stays connected (Server-Sent Events) so it can receive.
+- **Direct mode:** both devices online -> WebRTC data channel, the file never touches the server (no size limit,
+  STUN only; if a direct connection cannot be made the app falls back to the server inbox automatically).
+- **Server inbox:** receiver offline -> file is uploaded as a private draft and appears in their inbox for 24 hours.
+  Nothing can be downloaded until they accept.
+- **Firestore rules:** the shared `firestore.rules` now includes `mtDevices` and `mtTransfers`.
+  Deploy them once: `firebase deploy --only firestore`. Without them everything still works while the server stays
+  up, but device IDs / inbox items are forgotten when Render restarts.
+- No new npm packages and no new environment variables.

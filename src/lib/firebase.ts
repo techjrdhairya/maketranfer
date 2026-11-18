@@ -148,47 +148,30 @@ export async function deleteUserDocFromCloud(userId: string, slug: string) {
   }
 }
 
+// Remove the user's cloud records. With `slugs` only those documents are removed;
+// without it every record of the user is removed.
+// (Public documents are deleted by the server, never from the browser.)
 export async function deleteAllUserDocsFromCloud(userId: string, slugs?: string[]) {
   try {
-    const colRef = collection(db, 'users', userId, 'documents');
-    const snap = await getDocs(colRef);
-    const deletePromises = snap.docs.map((d) => deleteDoc(d.ref));
-    await Promise.allSettled(deletePromises);
-
-    // Also collect all relevant slugs to delete from publicDocuments and users documents
-    const targetSlugs = new Set<string>();
-    if (slugs && Array.isArray(slugs)) {
-      slugs.forEach((s) => s && targetSlugs.add(s));
+    let targets: string[] = [];
+    if (slugs && slugs.length > 0) {
+      targets = Array.from(new Set(slugs.filter(Boolean)));
+    } else {
+      const snap = await getDocs(collection(db, 'users', userId, 'documents'));
+      targets = snap.docs.map((d) => (d.data()?.slug as string) || d.id);
     }
-    snap.docs.forEach((d) => {
-      const data = d.data();
-      if (data?.slug) targetSlugs.add(data.slug);
-      if (d.id) targetSlugs.add(d.id);
-    });
 
-    const directUserPromises = Array.from(targetSlugs).map(async (s) => {
-      try {
+    await Promise.allSettled(
+      targets.map(async (s) => {
         const docId = encodeSlugForDocId(s);
         await deleteDoc(doc(db, 'users', userId, 'documents', docId));
         if (docId !== s) {
-          await deleteDoc(doc(db, 'users', userId, 'documents', s));
+          await deleteDoc(doc(db, 'users', userId, 'documents', s)).catch(() => {});
         }
-      } catch (e) {}
-    });
-    await Promise.allSettled(directUserPromises);
-
-    const publicDeletePromises = Array.from(targetSlugs).map(async (s) => {
-      try {
-        const docId = encodeSlugForDocId(s);
-        await deleteDoc(doc(db, 'publicDocuments', docId));
-        if (docId !== s) {
-          await deleteDoc(doc(db, 'publicDocuments', s));
-        }
-      } catch (e) {}
-    });
-    await Promise.allSettled(publicDeletePromises);
+      })
+    );
   } catch (err) {
-    console.error('Failed to delete all user docs from cloud:', err);
+    console.error('Failed to delete user docs from cloud:', err);
   }
 }
 
@@ -198,6 +181,9 @@ export async function fetchPublicDocFromFirestore(slug: string): Promise<any | n
     const snap = await getDoc(doc(db, 'publicDocuments', docId));
     if (snap.exists()) {
       const data = snap.data();
+      // Only published, non-expired documents may be shown through this fallback
+      if (data.status !== 'published') return null;
+      if (data.expiresAt && new Date(data.expiresAt).getTime() < Date.now()) return null;
       const cleanDoc = { ...data };
       delete cleanDoc.fileBase64;
       return cleanDoc;

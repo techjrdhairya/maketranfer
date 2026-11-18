@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { navigateToSignIn } from '../lib/nav';
+import { navigateToSignIn, navigateToDevices } from '../lib/nav';
+import { useDevices } from '../context/DeviceContext';
 import {
   FileUp,
   FolderLock,
@@ -13,6 +14,7 @@ import {
   Cloud,
   ChevronDown,
   Monitor,
+  Smartphone,
 } from 'lucide-react';
 import { Logo } from './Logo';
 import { getMyUploads } from '../lib/api';
@@ -35,6 +37,7 @@ export const Header: React.FC<HeaderProps> = ({
   const { user, isGuest, signOutUser } = useAuth();
   const [searchSlug, setSearchSlug] = useState('');
   const [uploadsCount, setUploadsCount] = useState(0);
+  const { pendingCount } = useDevices();
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
   const [isUserMenuOpen, setIsUserMenuOpen] = useState(false);
   const [isDeviceModalOpen, setIsDeviceModalOpen] = useState(false);
@@ -183,6 +186,22 @@ export const Header: React.FC<HeaderProps> = ({
             {uploadsCount > 0 && (
               <span className="w-4 h-4 bg-indigo-600 text-white rounded-full text-[10px] flex items-center justify-center font-mono font-bold">
                 {uploadsCount}
+              </span>
+            )}
+          </button>
+
+          {/* Devices: send / receive with a device ID */}
+          <button
+            id="btn-header-devices"
+            type="button"
+            onClick={() => navigateToDevices()}
+            className="flex items-center space-x-1.5 px-2.5 sm:px-3 py-2 text-xs font-semibold text-stone-700 hover:text-stone-950 bg-stone-100 hover:bg-stone-200/80 rounded-xl transition-colors relative cursor-pointer"
+          >
+            <Smartphone className="w-4 h-4 text-stone-500" />
+            <span className="hidden sm:inline">Devices</span>
+            {pendingCount > 0 && (
+              <span className="min-w-4 h-4 px-1 bg-pink-600 text-white rounded-full text-[10px] flex items-center justify-center font-mono font-bold">
+                {pendingCount}
               </span>
             )}
           </button>

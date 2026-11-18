@@ -4,9 +4,12 @@ import { UploadDropzone } from './components/UploadDropzone';
 import { PublishPanel } from './components/PublishPanel';
 import { MultiPublishPanel } from './components/MultiPublishPanel';
 import { DocumentViewer } from './components/DocumentViewer';
-import { MyDocumentsDrawer } from './components/MyDocumentsDrawer';
+import { MyDocumentsPage } from './components/MyDocumentsPage';
+import { DevicesPage } from './components/DevicesPage';
+import { IncomingTransferModal } from './components/IncomingTransferModal';
 import { SignInPage } from './components/SignInPage';
 import { useAuth } from './context/AuthContext';
+import { startServerKeepAlive } from './lib/api';
 import { Logo } from './components/Logo';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { UploadResponse } from './types';
@@ -29,10 +32,14 @@ export default function App() {
   const [currentSlug, setCurrentSlug] = useState<string | null>(null);
   const [activeUpload, setActiveUpload] = useState<UploadResponse | null>(null);
   const [multiUploads, setMultiUploads] = useState<UploadResponse[] | null>(null);
-  const [isMyDocsOpen, setIsMyDocsOpen] = useState(false);
+  const [isDocumentsRoute, setIsDocumentsRoute] = useState(false);
+  const [isDevicesRoute, setIsDevicesRoute] = useState(false);
   const [sampleLoading, setSampleLoading] = useState(false);
   const [isSignInRoute, setIsSignInRoute] = useState(false);
   const { user, isGuest, loading: authLoading } = useAuth();
+
+  // Wake the (free-tier) server right away and poll it every 14 minutes while the site is open
+  useEffect(() => startServerKeepAlive(), []);
 
   // Parse path on initial load or popstate
   useEffect(() => {
@@ -43,12 +50,33 @@ export default function App() {
 
       if (path === '/signin') {
         setIsSignInRoute(true);
+        setIsDocumentsRoute(false);
+        setIsDevicesRoute(false);
         setCurrentSlug(null);
         setActiveUpload(null);
         setMultiUploads(null);
         return;
       }
       setIsSignInRoute(false);
+
+      if (path === '/documents') {
+        setIsDocumentsRoute(true);
+        setIsDevicesRoute(false);
+        setCurrentSlug(null);
+        setActiveUpload(null);
+        setMultiUploads(null);
+        return;
+      }
+      setIsDocumentsRoute(false);
+
+      if (path === '/devices') {
+        setIsDevicesRoute(true);
+        setCurrentSlug(null);
+        setActiveUpload(null);
+        setMultiUploads(null);
+        return;
+      }
+      setIsDevicesRoute(false);
 
       if (querySlug) {
         setCurrentSlug(querySlug);
@@ -76,8 +104,21 @@ export default function App() {
     return () => window.removeEventListener('popstate', parseUrl);
   }, []);
 
+  const navigateToDocuments = () => {
+    setIsSignInRoute(false);
+    setIsDevicesRoute(false);
+    setIsDocumentsRoute(true);
+    setCurrentSlug(null);
+    setActiveUpload(null);
+    setMultiUploads(null);
+    window.history.pushState({}, '', '/documents');
+    window.scrollTo({ top: 0 });
+  };
+
   const navigateToSlug = (slug: string) => {
     setIsSignInRoute(false);
+    setIsDocumentsRoute(false);
+    setIsDevicesRoute(false);
     setCurrentSlug(slug);
     setActiveUpload(null);
     setMultiUploads(null);
@@ -86,6 +127,8 @@ export default function App() {
 
   const navigateHome = () => {
     setIsSignInRoute(false);
+    setIsDocumentsRoute(false);
+    setIsDevicesRoute(false);
     setCurrentSlug(null);
     setActiveUpload(null);
     setMultiUploads(null);
@@ -93,6 +136,8 @@ export default function App() {
   };
 
   const handleUploadSuccess = (res: UploadResponse) => {
+    setIsDocumentsRoute(false);
+    setIsDevicesRoute(false);
     setActiveUpload(res);
     setMultiUploads(null);
     setCurrentSlug(null);
@@ -273,23 +318,31 @@ export default function App() {
     return <div className="min-h-screen bg-stone-50" />;
   }
   if (isSignInRoute || needsSignIn) {
-    return <SignInPage onDone={navigateHome} />;
+    // On the /signin page go home afterwards; as a first-visit gate just continue to the page that was opened (e.g. /devices?to=ID)
+    return <SignInPage onDone={isSignInRoute ? navigateHome : () => {}} />;
   }
 
   return (
     <div className="min-h-screen flex flex-col bg-stone-50 text-stone-900 selection:bg-indigo-500 selection:text-white">
+      {/* Incoming direct transfers (prompts + progress) */}
+      <IncomingTransferModal />
+
       {/* Top Navigation */}
       <Header
         onGoHome={navigateHome}
-        onOpenMyDocuments={() => setIsMyDocsOpen(true)}
+        onOpenMyDocuments={navigateToDocuments}
         onNavigateToSlug={navigateToSlug}
         currentSlug={currentSlug}
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col justify-center py-8 sm:py-12">
+      <main className={`flex-1 flex flex-col ${isDocumentsRoute || isDevicesRoute ? '' : 'justify-center py-8 sm:py-12'}`}>
         <ErrorBoundary>
-          {currentSlug ? (
+          {isDevicesRoute ? (
+            <DevicesPage onBack={navigateHome} />
+          ) : isDocumentsRoute ? (
+            <MyDocumentsPage onOpenDocument={navigateToSlug} onNewUpload={navigateHome} />
+          ) : currentSlug ? (
             /* 1. Public Viewer View */
             <DocumentViewer slug={currentSlug} onGoHome={navigateHome} />
           ) : multiUploads ? (
@@ -406,13 +459,6 @@ export default function App() {
         )}
         </ErrorBoundary>
       </main>
-
-      {/* "My Documents" Management Drawer */}
-      <MyDocumentsDrawer
-        isOpen={isMyDocsOpen}
-        onClose={() => setIsMyDocsOpen(false)}
-        onOpenDocument={navigateToSlug}
-      />
 
       {/* Footer */}
       <footer className="border-t border-stone-200/80 bg-white/80 py-6 text-center text-xs text-stone-500">

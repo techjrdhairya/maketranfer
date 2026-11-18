@@ -1,4 +1,4 @@
-export type DocumentStatus = 'draft' | 'published' | 'unpublished' | 'expired';
+export type DocumentStatus = 'draft' | 'published' | 'unpublished' | 'expired' | 'missing' | 'unknown';
 
 export interface FolderItemMetadata {
   id: string;
@@ -81,4 +81,5 @@ export interface MyUploadItem {
   uploadedAt: string;
   isFolder?: boolean;
   totalFiles?: number;
+  status?: DocumentStatus; // last status we saw (used when the server cannot be reached)
 }

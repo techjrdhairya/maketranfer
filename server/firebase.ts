@@ -77,6 +77,45 @@ const CHUNK_SIZE = 800 * 1024;
 const MAX_CHUNKABLE_SIZE = 50 * 1024 * 1024; // Up to 50MB
 
 const inFlightPersists = new Set<string>();
+// If a persist is requested while another one for the same document is running, keep the
+// newest data and run it afterwards (otherwise later changes such as publish/unpublish are lost).
+const pendingPersists = new Map<string, { docData: any; uploadsDir: string }>();
+
+// Deleted documents: docId (encoded slug) -> internal document id that was deleted.
+// Stops a slow/in-flight upload or a later Firestore read from bringing a deleted document back.
+const tombstones = new Map<string, string>();
+
+export function markDeleted(slug: string, internalId?: string) {
+  if (!slug || !internalId) return;
+  tombstones.set(encodeSlugForDocId(slug), internalId);
+}
+
+export function clearDeleted(slug: string) {
+  if (slug) tombstones.delete(encodeSlugForDocId(slug));
+}
+
+export function isDeleted(slug: string, internalId?: string): boolean {
+  if (!slug || !internalId) return false;
+  return tombstones.get(encodeSlugForDocId(slug)) === internalId;
+}
+
+// Cloud deletes that failed (quota / network) are retried in the background.
+const pendingCloudDeletes = new Map<string, { slug: string; isFolder?: boolean }>();
+let retryTimer: ReturnType<typeof setInterval> | null = null;
+function scheduleDeleteRetry() {
+  if (retryTimer) return;
+  retryTimer = setInterval(async () => {
+    for (const [key, v] of Array.from(pendingCloudDeletes.entries())) {
+      const ok = await deleteFirestoreDocNow(v.slug, v.isFolder);
+      if (ok) pendingCloudDeletes.delete(key);
+    }
+    if (pendingCloudDeletes.size === 0 && retryTimer) {
+      clearInterval(retryTimer);
+      retryTimer = null;
+    }
+  }, 5 * 60 * 1000);
+  (retryTimer as any)?.unref?.();
+}
 
 async function uploadBufferChunksInBatches(
   chunksColRef: any,
@@ -132,7 +171,9 @@ export async function persistDocumentToFirestore(docData: any, uploadsDir: strin
     if (isQuotaExhausted()) return;
 
     const docId = encodeSlugForDocId(docData.slug);
+    if (isDeleted(docData.slug, docData.id)) return;
     if (inFlightPersists.has(docId)) {
+      pendingPersists.set(docId, { docData, uploadsDir });
       return;
     }
     inFlightPersists.add(docId);
@@ -229,11 +270,22 @@ export async function persistDocumentToFirestore(docData: any, uploadsDir: strin
         payload.items = backedItems;
       }
 
+      // The document may have been deleted while its chunks were uploading: clean up instead of re-creating it.
+      if (isDeleted(docData.slug, docData.id)) {
+        await deleteFirestoreDocNow(docData.slug, docData.isFolder);
+        return;
+      }
+
       const cleanPayload = removeUndefinedFields(payload);
       await setDoc(firestoreRef, cleanPayload, { merge: true });
       console.log(`Document ${docData.slug} successfully persisted to Cloud Firestore.`);
     } finally {
       inFlightPersists.delete(docId);
+      const next = pendingPersists.get(docId);
+      if (next) {
+        pendingPersists.delete(docId);
+        persistDocumentToFirestore(next.docData, next.uploadsDir).catch(() => {});
+      }
     }
   } catch (err: any) {
     if (err?.code === 'resource-exhausted' || err?.message?.includes('RESOURCE_EXHAUSTED')) {
@@ -382,6 +434,7 @@ export async function fetchDocumentFromFirestore(slug: string, uploadsDir: strin
 
     const data = snap.data();
     if (!data || !data.slug) return null;
+    if (isDeleted(data.slug, data.id)) return null;
 
     // Restore single file if missing locally
     if (data.storedFilename) {
@@ -413,52 +466,73 @@ export async function fetchDocumentFromFirestore(slug: string, uploadsDir: strin
   }
 }
 
-export async function deleteDocumentFromFirestore(slug: string, isFolder?: boolean) {
+// Deletes the document (and its chunk sub-documents) from Firestore.
+// Returns true when the main document is confirmed gone, false when it could not be deleted.
+async function deleteFirestoreDocNow(slug: string, isFolder?: boolean): Promise<boolean> {
   try {
     const db = getFirestoreDB();
-    if (!db || !slug) return;
+    if (!db || !slug) return true;
     const docId = encodeSlugForDocId(slug);
 
-    const deleteOperation = async () => {
+    const op = async (): Promise<boolean> => {
       await deleteDoc(doc(db, 'publicDocuments', docId));
 
-      // Attempt deleting any chunks subcollection documents
+      // Best effort: remove chunk sub-documents so no storage is left behind
       try {
         const chunksCol = collection(db, 'publicDocuments', docId, 'chunks');
         const chunksSnap = await getDocs(chunksCol);
         if (!chunksSnap.empty) {
           await Promise.allSettled(chunksSnap.docs.map((c) => deleteDoc(c.ref)));
         }
-      } catch (e) {}
+      } catch {}
 
-      // Only check for folder items if doc was a folder
-      if (isFolder) {
+      if (isFolder !== false) {
         try {
           const itemsCol = collection(db, 'publicDocuments', docId, 'items');
           const itemsSnap = await getDocs(itemsCol);
           for (const itemDoc of itemsSnap.docs) {
             try {
-              const itemChunksCol = collection(itemDoc.ref, 'chunks');
-              const itemChunksSnap = await getDocs(itemChunksCol);
+              const itemChunksSnap = await getDocs(collection(itemDoc.ref, 'chunks'));
               if (!itemChunksSnap.empty) {
                 await Promise.allSettled(itemChunksSnap.docs.map((c) => deleteDoc(c.ref)));
               }
             } catch {}
             await deleteDoc(itemDoc.ref).catch(() => {});
           }
-        } catch (e) {}
+        } catch {}
       }
       console.log(`Document ${slug} deleted from Cloud Firestore.`);
+      return true;
     };
 
-    // Run with 3 second timeout so slow network never hangs
-    await Promise.race([
-      deleteOperation(),
-      new Promise((resolve) => setTimeout(resolve, 3000)),
+    const result = await Promise.race([
+      op(),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 20000)),
     ]);
-  } catch (err) {
-    console.error(`Failed to delete document ${slug} from Firestore:`, err);
+    return result;
+  } catch (err: any) {
+    console.error(`Failed to delete document ${slug} from Firestore:`, err?.message || err);
+    return false;
   }
+}
+
+// Public delete entry point. Marks the document as deleted (so it can never be restored),
+// then removes it from Firestore. If the cloud delete fails it is retried in the background.
+// Always resolves with true when the document is considered deleted from the user's point of view.
+export async function deleteDocumentFromFirestore(
+  slug: string,
+  isFolder?: boolean,
+  internalId?: string
+): Promise<boolean> {
+  if (!slug) return true;
+  markDeleted(slug, internalId);
+  const ok = await deleteFirestoreDocNow(slug, isFolder);
+  if (!ok) {
+    pendingCloudDeletes.set(encodeSlugForDocId(slug), { slug, isFolder });
+    scheduleDeleteRetry();
+    console.warn(`Cloud delete of ${slug} failed; will retry in the background.`);
+  }
+  return true;
 }
 
 export async function loadDocumentsFromFirestore(uploadsDir: string): Promise<any[]> {
@@ -473,6 +547,7 @@ export async function loadDocumentsFromFirestore(uploadsDir: string): Promise<an
     for (const d of snap.docs) {
       const data = d.data();
       if (!data || !data.slug) continue;
+      if (isDeleted(data.slug, data.id)) continue;
 
       if (data.storedFilename) {
         await restoreFileFromFirestore(d.id, data, uploadsDir);

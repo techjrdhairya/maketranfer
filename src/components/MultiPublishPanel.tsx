@@ -512,6 +512,7 @@ export const MultiPublishPanel: React.FC<MultiPublishPanelProps> = ({
         originalFilename: updatedDoc.originalFilename,
         size: updatedDoc.size,
         uploadedAt: updatedDoc.uploadedAt,
+        status: 'published',
       });
 
       setPostEditSaveSuccess('Link settings updated successfully!');

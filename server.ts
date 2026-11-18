@@ -7,6 +7,7 @@ import * as archiverModule from 'archiver';
 import { createServer as createViteServer } from 'vite';
 import { storage } from './server/storage.js';
 import { isValidSlug } from './server/slug.js';
+import { registerDeviceRoutes } from './server/devices.js';
 
 function createZipArchive(options?: any) {
   const mod = archiverModule as any;
@@ -87,7 +88,8 @@ async function startServer() {
   app.use((req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, PATCH, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, x-client-id, x-access-token, x-doc-password, Range');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization, x-client-id, x-access-token, x-doc-password, x-management-token, Range');
+    res.header('Access-Control-Max-Age', '86400');
     res.header('Access-Control-Expose-Headers', 'Content-Range, Accept-Ranges, Content-Length, Content-Disposition');
     if (req.method === 'OPTIONS') {
       return res.status(200).end();
@@ -108,6 +110,14 @@ async function startServer() {
     return false;
   };
 
+  // Drafts are private: only someone holding the management token can see them
+  const hasManagementAccess = (doc: any, req: express.Request): boolean => {
+    const t = (req.headers['x-management-token'] as string) || (req.query.mt as string);
+    return Boolean(t && doc.managementToken === t);
+  };
+  const isDraftHidden = (doc: any, req: express.Request): boolean =>
+    doc.status === 'draft' && !hasManagementAccess(doc, req);
+
   // 1. Health check
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', time: new Date().toISOString() });
@@ -119,7 +129,7 @@ async function startServer() {
     const forwardedHost = (req.headers['x-forwarded-host'] as string) || req.headers.host || '';
     const detectedOrigin = forwardedHost ? `${forwardedProto}://${forwardedHost}` : '';
     const cloudAppUrl = process.env.APP_URL || '';
-    const sharedAppUrl = 'https://ais-pre-3r3kxd6lszhpwv7vix3zbg-378094415737.asia-southeast1.run.app';
+    const sharedAppUrl = 'https://maketransfer.web.app';
     const devAppUrl = 'https://ais-dev-3r3kxd6lszhpwv7vix3zbg-378094415737.asia-southeast1.run.app';
 
     // Best public origin to access this app from any other computer/monitor
@@ -493,33 +503,36 @@ async function startServer() {
     });
   });
 
-  // 3.2 Batch delete documents
+  // 3.2 Batch delete documents (every deletion is authorised by token or owner client id)
   app.post('/api/documents/delete-batch', async (req, res) => {
-    const items: Array<{ slug: string; managementToken?: string }> = req.body?.items || [];
+    const items: Array<{ slug: string; managementToken?: string }> = Array.isArray(req.body?.items) ? req.body.items : [];
     const clientId = getRequestClientId(req);
     const deleteAll = Boolean(req.body?.all);
-    let deletedCount = 0;
+    const deleted: string[] = [];
+    const failed: Array<{ slug: string; error: string }> = [];
 
     await storage.waitForInit();
 
-    // If client requested to delete all documents owned by their client session
+    // Delete everything owned by this browser/client id
     if (deleteAll && clientId) {
-      deletedCount += await storage.deleteDocumentsByOwner(clientId);
-    }
-
-    // Also delete any specifically passed items
-    for (const item of items) {
-      if (item?.slug) {
-        const cleanSlug = item.slug.trim().replace(/^\/+|\/+$/g, '');
-        const result = deleteAll
-          ? await storage.forceDeleteDocument(cleanSlug)
-          : await storage.deleteDocument(cleanSlug, item.managementToken, clientId);
-        if (result.success) {
-          deletedCount++;
-        }
+      for (const owned of storage.getDocumentsByOwner(clientId)) {
+        const r = await storage.forceDeleteDocument(owned.slug);
+        if (r.success) deleted.push(owned.slug);
+        else failed.push({ slug: owned.slug, error: r.error || 'Delete failed' });
       }
     }
-    return res.json({ success: true, deletedCount });
+
+    // Delete the specifically requested items
+    for (const item of items) {
+      if (!item?.slug) continue;
+      const cleanSlug = item.slug.trim().replace(/^\/+|\/+$/g, '');
+      if (!cleanSlug || deleted.includes(cleanSlug)) continue;
+      const r = await storage.deleteDocument(cleanSlug, item.managementToken, clientId);
+      if (r.success || r.error === 'Document not found') deleted.push(cleanSlug);
+      else failed.push({ slug: cleanSlug, error: r.error || 'Delete failed' });
+    }
+
+    return res.json({ success: failed.length === 0, deletedCount: deleted.length, deleted, failed });
   });
 
   // 3. Publish document (supports nested slugs with '/')
@@ -617,6 +630,10 @@ async function startServer() {
       return res.status(404).json({ error: 'This document has been unpublished by its owner.' });
     }
 
+    if (isDraftHidden(doc, req)) {
+      return res.status(404).json({ error: 'This document has not been published yet.' });
+    }
+
     const isExpired = storage.checkIsExpired(doc);
     if (isExpired) {
       return res.status(410).json({
@@ -691,6 +708,10 @@ async function startServer() {
       return res.status(404).send('Document is unpublished');
     }
 
+    if (isDraftHidden(doc, req)) {
+      return res.status(404).send('Document has not been published yet');
+    }
+
     if (storage.checkIsExpired(doc)) {
       return res.status(410).send('Document link has expired');
     }
@@ -751,6 +772,10 @@ async function startServer() {
 
     if (doc.status === 'unpublished') {
       return res.status(404).send('Document is unpublished');
+    }
+
+    if (isDraftHidden(doc, req)) {
+      return res.status(404).send('Document has not been published yet');
     }
 
     if (storage.checkIsExpired(doc)) {
@@ -854,6 +879,7 @@ async function startServer() {
     const items: Array<{ slug: string; managementToken?: string }> = req.body?.items || [];
     const clientId = getRequestClientId(req);
     const resultsMap = new Map<string, any>();
+    const missing: string[] = [];
 
     // Set cookie if clientId exists to preserve session
     if (clientId) {
@@ -875,11 +901,15 @@ async function startServer() {
       const cleanSlug = item.slug.trim().replace(/^\/+|\/+$/g, '');
       const doc = await storage.getBySlugAsync(cleanSlug);
       if (doc) {
-        if (!item.managementToken || doc.managementToken === item.managementToken || (clientId && doc.ownerClientId === clientId)) {
+        if (doc.managementToken === item.managementToken || (clientId && doc.ownerClientId === clientId)) {
           const sanitized = storage.sanitizeForPublic(doc);
           sanitized.managementToken = doc.managementToken;
           resultsMap.set(doc.slug, sanitized);
+        } else {
+          missing.push(cleanSlug);
         }
+      } else {
+        missing.push(cleanSlug);
       }
     }
 
@@ -899,7 +929,7 @@ async function startServer() {
       (a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()
     );
 
-    return res.json({ documents });
+    return res.json({ documents, missing: missing.filter((m) => !resultsMap.has(m)) });
   });
 
   // 12. Check custom slug availability (supports nested slugs with '/')
@@ -911,6 +941,9 @@ async function startServer() {
     }
     return res.json({ available: storage.isSlugAvailable(slug) });
   });
+
+  // Device IDs, inbox and direct-transfer signalling
+  registerDeviceRoutes(app);
 
   // API 404 handler for missing /api endpoints
   app.all('/api/*', (req, res) => {
@@ -949,6 +982,20 @@ async function startServer() {
 
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`MakeTransfer Server running on http://localhost:${PORT}`);
+
+    // Keep-alive: Render's free plan sleeps after ~15 minutes without traffic.
+    // Ping our own public URL every 14 minutes so the service stays awake.
+    const keepAliveUrl = (process.env.KEEP_ALIVE_URL || process.env.RENDER_EXTERNAL_URL || '').replace(/\/+$/, '');
+    if (keepAliveUrl) {
+      const KEEP_ALIVE_MS = 14 * 60 * 1000;
+      const timer = setInterval(() => {
+        fetch(`${keepAliveUrl}/api/health`)
+          .then((r) => console.log(`[keep-alive] ping ${keepAliveUrl}/api/health -> ${r.status}`))
+          .catch((e) => console.warn('[keep-alive] ping failed:', e?.message || e));
+      }, KEEP_ALIVE_MS);
+      (timer as any).unref?.();
+      console.log(`[keep-alive] pinging ${keepAliveUrl}/api/health every 14 minutes`);
+    }
   });
 }
 

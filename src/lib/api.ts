@@ -1,6 +1,7 @@
 import { apiUrl } from './apiBase';
 import {
   DocumentMetadata,
+  DocumentStatus,
   MyUploadItem,
   PublishRequest,
   UploadResponse,
@@ -54,7 +55,7 @@ export function getClientId(): string {
 }
 
 // Save uploaded document to local storage, backups, and Firestore
-export function saveMyUpload(item: MyUploadItem) {
+export function saveMyUpload(item: MyUploadItem, opts?: { skipCloud?: boolean }) {
   try {
     const list = getMyUploads();
     const filtered = list.filter((x) => x.slug !== item.slug);
@@ -78,7 +79,7 @@ export function saveMyUpload(item: MyUploadItem) {
     } catch {}
 
     // Firestore Cloud Sync for Google authenticated user
-    if (auth.currentUser) {
+    if (auth.currentUser && !opts?.skipCloud) {
       saveUserDocToCloud(auth.currentUser.uid, {
         id: item.slug,
         slug: item.slug,
@@ -88,7 +89,7 @@ export function saveMyUpload(item: MyUploadItem) {
         mimeType: item.isFolder ? 'application/zip' : 'application/octet-stream',
         size: item.size || 0,
         uploadedAt: item.uploadedAt || new Date().toISOString(),
-        status: 'published',
+        status: item.status || 'draft',
         viewCount: 0,
         downloadCount: 0,
         scanStatus: 'clean',
@@ -145,6 +146,31 @@ export function getMyUploads(): MyUploadItem[] {
   } catch {
     return [];
   }
+}
+
+// Write the local list without notifying listeners (used for background refreshes).
+function persistMyUploadsQuiet(list: MyUploadItem[]) {
+  const serialized = JSON.stringify(list.slice(0, 100));
+  try {
+    localStorage.setItem(MY_UPLOADS_STORAGE_KEY, serialized);
+    localStorage.setItem(LEGACY_MY_UPLOADS_STORAGE_KEY, serialized);
+  } catch {}
+  try {
+    sessionStorage.setItem(MY_UPLOADS_STORAGE_KEY, serialized);
+    sessionStorage.setItem(LEGACY_MY_UPLOADS_STORAGE_KEY, serialized);
+  } catch {}
+  try {
+    const mini = list.slice(0, 25).map((x) => `${x.slug}:${x.managementToken}`).join('|');
+    document.cookie = `maketransfer_uploads_backup=${encodeURIComponent(mini)}; path=/; max-age=31536000; SameSite=Lax`;
+    document.cookie = `docshare_uploads_backup=${encodeURIComponent(mini)}; path=/; max-age=31536000; SameSite=Lax`;
+  } catch {}
+}
+
+export function setMyUploadStatus(slug: string, status: DocumentStatus) {
+  try {
+    const list = getMyUploads().map((x) => (x.slug === slug ? { ...x, status } : x));
+    persistMyUploadsQuiet(list);
+  } catch {}
 }
 
 export function removeMyUpload(slug: string) {
@@ -828,6 +854,7 @@ export async function publishBatch(
         originalFilename: item.document.originalFilename,
         size: item.document.size,
         uploadedAt: item.document.uploadedAt,
+        status: 'published',
       });
     }
   });
@@ -869,6 +896,7 @@ export async function publishDocument(
       uploadedAt: data.document.uploadedAt,
       isFolder: data.document.isFolder,
       totalFiles: data.document.totalFiles,
+      status: 'published',
     });
   }
 
@@ -968,7 +996,10 @@ export async function verifyDocumentPassword(
   return data;
 }
 
-export function fallbackItemsToMetadata(items: MyUploadItem[]): DocumentMetadata[] {
+export function fallbackItemsToMetadata(
+  items: MyUploadItem[],
+  forceStatus?: DocumentStatus
+): DocumentMetadata[] {
   return items.map((item) => {
     const isFolder = Boolean(item.isFolder);
     const filename = item.originalFilename || item.slug;
@@ -982,7 +1013,7 @@ export function fallbackItemsToMetadata(items: MyUploadItem[]): DocumentMetadata
       mimeType: isFolder ? 'application/zip' : 'application/octet-stream',
       size: item.size || 0,
       uploadedAt: item.uploadedAt || new Date().toISOString(),
-      status: 'published',
+      status: forceStatus || item.status || 'unknown',
       hasPassword: false,
       viewCount: 0,
       downloadCount: 0,
@@ -995,31 +1026,53 @@ export function fallbackItemsToMetadata(items: MyUploadItem[]): DocumentMetadata
   });
 }
 
-// Fetch user's managed documents
-export async function fetchMyDocuments(): Promise<DocumentMetadata[]> {
+async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export interface MyDocumentsResult {
+  documents: DocumentMetadata[];
+  /** true when the server could not be reached: statuses below come from what this browser last saw */
+  offline: boolean;
+  /** number of saved items the server no longer knows about (shown as "Unavailable") */
+  missingCount: number;
+}
+
+// Load the user's documents. The server is the source of truth for status.
+// - Server reachable: server statuses are shown; items it does not know are marked "missing".
+// - Server unreachable: the saved list is shown with the last known status (never invented as "published").
+export async function loadMyDocuments(): Promise<MyDocumentsResult> {
   const items = getMyUploads();
   const clientId = getClientId();
 
   try {
-    const res = await fetch(apiUrl('/api/my-documents'), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-client-id': clientId,
+    // 75 s: a sleeping free-tier server can take about a minute to wake up
+    const res = await fetchWithTimeout(
+      apiUrl('/api/my-documents'),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-client-id': clientId },
+        body: JSON.stringify({ items, clientId }),
       },
-      body: JSON.stringify({ items, clientId }),
-    });
-
-    if (!res.ok) {
-      return fallbackItemsToMetadata(items);
-    }
+      75000
+    );
+    if (!res.ok) throw new Error(`Server responded ${res.status}`);
 
     const data = await res.json();
     const serverDocs: DocumentMetadata[] = data.documents || [];
+    const serverSlugs = new Set(serverDocs.map((d) => d.slug));
+    const missingItems = items.filter((x) => !serverSlugs.has(x.slug));
 
-    if (serverDocs.length > 0) {
-      // Sync retrieved server documents to local storage so client storage is always fully populated
-      const syncItems: MyUploadItem[] = serverDocs.map((doc: any) => ({
+    // Refresh the local cache quietly (no events => no refresh loops).
+    // Missing items are kept so the user can still see and remove them.
+    const merged: MyUploadItem[] = [
+      ...serverDocs.map((doc: any) => ({
         slug: doc.slug,
         managementToken: doc.managementToken || items.find((x) => x.slug === doc.slug)?.managementToken || '',
         originalFilename: doc.folderName || doc.originalFilename,
@@ -1027,32 +1080,28 @@ export async function fetchMyDocuments(): Promise<DocumentMetadata[]> {
         uploadedAt: doc.uploadedAt,
         isFolder: doc.isFolder,
         totalFiles: doc.totalFiles,
-      }));
+        status: doc.status,
+      })),
+      ...missingItems,
+    ];
+    persistMyUploadsQuiet(merged);
 
-      try {
-        const serialized = JSON.stringify(syncItems.slice(0, 100));
-        localStorage.setItem(MY_UPLOADS_STORAGE_KEY, serialized);
-        localStorage.setItem(LEGACY_MY_UPLOADS_STORAGE_KEY, serialized);
-        sessionStorage.setItem(MY_UPLOADS_STORAGE_KEY, serialized);
-        sessionStorage.setItem(LEGACY_MY_UPLOADS_STORAGE_KEY, serialized);
-        emitUploadsUpdated(syncItems);
-      } catch {}
-
-      return serverDocs;
-    }
-
-    if (items.length > 0) {
-      return fallbackItemsToMetadata(items);
-    }
-
-    return [];
+    const documents = [...serverDocs, ...fallbackItemsToMetadata(missingItems, 'missing')].sort(
+      (a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime()
+    );
+    return { documents, offline: false, missingCount: missingItems.length };
   } catch (err) {
-    console.warn('Network error fetching my documents, using local cached items:', err);
-    return fallbackItemsToMetadata(items);
+    console.warn('Could not reach the server, showing the saved list:', err);
+    return { documents: fallbackItemsToMetadata(items), offline: true, missingCount: 0 };
   }
 }
 
-// Update document settings
+// Backwards-compatible wrapper
+export async function fetchMyDocuments(): Promise<DocumentMetadata[]> {
+  return (await loadMyDocuments()).documents;
+}
+
+// Update document settings (status, password, expiry, download limit)
 export async function updateDocumentSettings(
   slug: string,
   managementToken: string,
@@ -1067,83 +1116,127 @@ export async function updateDocumentSettings(
     body: JSON.stringify(updates),
   });
 
-  const data = await res.json();
+  const data = await res.json().catch(() => ({}));
   if (!res.ok) {
     throw new Error(data.error || 'Update failed');
+  }
+  if (data.document?.status) {
+    setMyUploadStatus(data.document.slug || slug, data.document.status);
   }
   return data.document;
 }
 
-// Delete document
+// Delete one document. "Already gone" (404) counts as success so ghost entries can always be removed.
 export async function deleteDocument(slug: string, managementToken?: string): Promise<void> {
   const clientId = getClientId();
-  const res = await fetch(apiUrl(`/api/documents/${encodeURIComponent(slug)}`), {
-    method: 'DELETE',
-    headers: {
-      'x-management-token': managementToken || '',
-      'x-client-id': clientId,
+  const res = await fetchWithTimeout(
+    apiUrl(`/api/documents/${encodeURIComponent(slug)}`),
+    {
+      method: 'DELETE',
+      headers: {
+        'x-management-token': managementToken || '',
+        'x-client-id': clientId,
+      },
     },
-  });
+    60000
+  );
 
-  const data = await res.json();
-  if (!res.ok) {
+  if (!res.ok && res.status !== 404) {
+    const data = await res.json().catch(() => ({}));
     throw new Error(data.error || 'Delete failed');
   }
+
   removeMyUpload(slug);
+  if (auth.currentUser) {
+    try {
+      await deleteUserDocFromCloud(auth.currentUser.uid, slug);
+    } catch (e) {
+      console.warn('Could not delete cloud record:', e);
+    }
+  }
 }
 
-// Delete all documents permanently from server and local state
-export async function deleteAllMyDocuments(documents: DocumentMetadata[]): Promise<void> {
+export interface DeleteAllResult {
+  deleted: string[];
+  failed: Array<{ slug: string; error: string }>;
+}
+
+// Delete several documents. Local and cloud records are only removed for documents the server confirmed deleted.
+export async function deleteAllMyDocuments(documents: DocumentMetadata[]): Promise<DeleteAllResult> {
   const localItems = getMyUploads();
   const clientId = getClientId();
 
-  // Combine slugs from both passed documents and localItems
   const allSlugs = new Set<string>();
   documents.forEach((d) => d?.slug && allSlugs.add(d.slug));
-  localItems.forEach((it) => it?.slug && allSlugs.add(it.slug));
 
-  const deletePayload = Array.from(allSlugs).map((slug) => {
-    const docMatch = documents.find((x) => x.slug === slug);
-    const localMatch = localItems.find((x) => x.slug === slug);
-    return {
-      slug,
-      managementToken: docMatch?.managementToken || localMatch?.managementToken || '',
-    };
-  });
+  const payload = Array.from(allSlugs).map((slug) => ({
+    slug,
+    managementToken:
+      documents.find((x) => x.slug === slug)?.managementToken ||
+      localItems.find((x) => x.slug === slug)?.managementToken ||
+      '',
+  }));
 
-  // 1. Immediately delete from Firestore cloud if user is signed in
-  if (auth.currentUser) {
-    try {
-      await deleteAllUserDocsFromCloud(auth.currentUser.uid, Array.from(allSlugs));
-    } catch (e) {
-      console.warn('Error deleting user docs from cloud:', e);
-    }
-  }
+  const result: DeleteAllResult = { deleted: [], failed: [] };
 
-  // 2. Call batch delete API on server
   try {
-    const res = await fetch(apiUrl('/api/documents/delete-batch'), {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-client-id': clientId,
+    const res = await fetchWithTimeout(
+      apiUrl('/api/documents/delete-batch'),
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-client-id': clientId },
+        body: JSON.stringify({ items: payload, clientId }),
       },
-      body: JSON.stringify({ items: deletePayload, clientId, all: true }),
-    });
-    if (!res.ok) {
-      throw new Error('Batch delete request failed');
-    }
-  } catch (err) {
-    console.warn('Batch delete failed, falling back to individual deletes:', err);
-    await Promise.allSettled(
-      deletePayload
-        .filter((item) => item.slug)
-        .map((item) => deleteDocument(item.slug, item.managementToken))
+      120000
     );
+    if (!res.ok) throw new Error('Batch delete request failed');
+    const data = await res.json();
+    result.deleted = Array.isArray(data.deleted) ? data.deleted : [];
+    result.failed = Array.isArray(data.failed) ? data.failed : [];
+  } catch (err) {
+    console.warn('Batch delete failed, falling back to one-by-one deletes:', err);
+    for (const item of payload) {
+      try {
+        await deleteDocument(item.slug, item.managementToken); // also cleans local + cloud
+        result.deleted.push(item.slug);
+      } catch (e: any) {
+        result.failed.push({ slug: item.slug, error: e?.message || 'Delete failed' });
+      }
+    }
+    return result;
   }
 
-  // 3. Clear local storage and cookie caches
-  clearAllMyUploads();
+  // Clean local + cloud records only for confirmed deletions
+  for (const slug of result.deleted) {
+    removeMyUpload(slug);
+  }
+  if (auth.currentUser && result.deleted.length > 0) {
+    try {
+      await deleteAllUserDocsFromCloud(auth.currentUser.uid, result.deleted);
+    } catch (e) {
+      console.warn('Could not delete cloud records:', e);
+    }
+  }
+  return result;
+}
+
+// ---- Keep the (free-tier) backend awake ----
+export async function pingServer(): Promise<boolean> {
+  try {
+    const res = await fetchWithTimeout(apiUrl('/api/health'), { cache: 'no-store' }, 75000);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+// Wake the server as soon as the site opens, then poll it every 14 minutes while a tab is open.
+export function startServerKeepAlive(): () => void {
+  pingServer();
+  const id = setInterval(() => {
+    pingServer();
+  }, 14 * 60 * 1000);
+  return () => clearInterval(id);
 }
 
 // Check custom slug availability
@@ -1194,9 +1287,9 @@ export function getEffectiveBaseUrl(serverInfo?: ServerInfo | null): string {
       if (serverInfo?.publicUrl) return serverInfo.publicUrl;
       if (serverInfo?.cloudAppUrl) return serverInfo.cloudAppUrl;
       if (serverInfo?.sharedAppUrl) return serverInfo.sharedAppUrl;
-      return 'https://ais-pre-3r3kxd6lszhpwv7vix3zbg-378094415737.asia-southeast1.run.app';
+      return 'https://maketransfer.web.app';
     }
     return window.location.origin;
   }
-  return serverInfo?.publicUrl || 'https://ais-pre-3r3kxd6lszhpwv7vix3zbg-378094415737.asia-southeast1.run.app';
+  return serverInfo?.publicUrl || 'https://maketransfer.web.app';
 }

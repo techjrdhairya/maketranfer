@@ -195,5 +195,14 @@ service cloud.firestore {
     match /publicDocuments/{document=**} {
       allow read, write: if true;
     }
+    // MakeTransfer: device IDs and device-to-device transfer inbox (written by the MakeTransfer server).
+    // The server uses the client SDK without auth, so these stay open for now. Secrets are never stored in plain
+    // text (device keys are hashed); move the server to the Admin SDK to lock these down.
+    match /mtDevices/{id} {
+      allow read, write: if true;
+    }
+    match /mtTransfers/{id} {
+      allow read, write: if true;
+    }
   }
 }

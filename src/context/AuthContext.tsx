@@ -68,7 +68,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
                 mimeType: item.isFolder ? 'application/zip' : 'application/octet-stream',
                 size: item.size || 0,
                 uploadedAt: item.uploadedAt || new Date().toISOString(),
-                status: 'published',
+                status: item.status || 'draft',
                 viewCount: 0,
                 downloadCount: 0,
                 scanStatus: 'clean',
@@ -80,17 +80,23 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
             }
           }
 
-          // Also pull down any existing cloud documents into local storage cache
+          // Pull cloud documents into the local cache, but never overwrite what this browser already has
+          const localSlugs = new Set(getMyUploads().map((x) => x.slug));
           for (const cloudDoc of cloudDocs) {
-            saveMyUpload({
-              slug: cloudDoc.slug,
-              managementToken: cloudDoc.managementToken || '',
-              originalFilename: cloudDoc.originalFilename || cloudDoc.originalName || 'Document',
-              size: cloudDoc.size ?? cloudDoc.fileSize ?? 0,
-              uploadedAt: cloudDoc.uploadedAt,
-              isFolder: Boolean(cloudDoc.isFolder),
-              totalFiles: cloudDoc.totalFiles || 1,
-            });
+            if (!cloudDoc.slug || localSlugs.has(cloudDoc.slug)) continue;
+            saveMyUpload(
+              {
+                slug: cloudDoc.slug,
+                managementToken: cloudDoc.managementToken || '',
+                originalFilename: cloudDoc.originalFilename || cloudDoc.originalName || 'Document',
+                size: cloudDoc.size ?? cloudDoc.fileSize ?? 0,
+                uploadedAt: cloudDoc.uploadedAt,
+                isFolder: Boolean(cloudDoc.isFolder),
+                totalFiles: cloudDoc.totalFiles || 1,
+                status: (cloudDoc.status as any) || 'unknown',
+              },
+              { skipCloud: true }
+            );
           }
         } catch (e) {
           console.warn('Sync with cloud failed:', e);
