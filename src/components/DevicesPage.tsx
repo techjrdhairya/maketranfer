@@ -42,7 +42,7 @@ const CONNECTION_LABEL: Record<string, { text: string; cls: string }> = {
 
 export const DevicesPage: React.FC<DevicesPageProps> = ({ onBack }) => {
   const dev = useDevices();
-  const { identity, settings, connection, connectionError } = dev;
+  const { identity, settings, connection } = dev;
 
   const [toast, setToast] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -197,7 +197,7 @@ export const DevicesPage: React.FC<DevicesPageProps> = ({ onBack }) => {
         <div role="alert" className="flex items-center justify-between gap-3 px-4 py-3 bg-red-50 border border-red-200 text-red-700 rounded-2xl text-xs">
           <span className="flex items-center space-x-2">
             <WifiOff className="w-4 h-4 shrink-0" />
-            <span>{connectionError || 'Could not reach the server to create your device ID.'} We will keep trying.</span>
+            <span>Could not reach the server to create your device ID. It may be waking up, we will keep trying.</span>
           </span>
         </div>
       )}

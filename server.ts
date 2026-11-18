@@ -120,7 +120,7 @@ async function startServer() {
 
   // 1. Health check
   app.get('/api/health', (req, res) => {
-    res.json({ status: 'ok', time: new Date().toISOString(), features: { devices: true } });
+    res.json({ status: 'ok', time: new Date().toISOString() });
   });
 
   // 1.1 Device & Server Network Info (helps desktop PCs with monitors & other devices connect)

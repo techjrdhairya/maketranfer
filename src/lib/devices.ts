@@ -1,5 +1,5 @@
 // Client helpers for device IDs, the relay inbox and signalling.
-import { apiUrl, API_BASE } from './apiBase';
+import { apiUrl } from './apiBase';
 
 export interface DeviceIdentity {
   deviceId: string;
@@ -111,37 +111,14 @@ export class DeviceApiError extends Error {
 async function request(path: string, init: RequestInit & { timeoutMs?: number } = {}): Promise<any> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), init.timeoutMs ?? 75000); // a sleeping server needs up to a minute
-  const host = API_BASE || window.location.origin;
   try {
     const res = await fetch(apiUrl(path), { ...init, signal: controller.signal });
-    const text = await res.text();
-    let data: any = null;
-    try { data = text ? JSON.parse(text) : {}; } catch { data = null; }
-
-    if (data === null) {
-      // Not JSON: usually the static site answered instead of the API (API URL missing from this build)
-      throw new DeviceApiError(
-        res.ok
-          ? `${host} answered with a web page instead of the API. This build probably has no backend URL (VITE_API_BASE_URL).`
-          : `The server at ${host} returned an error (HTTP ${res.status}).`,
-        res.status,
-        'BAD_RESPONSE'
-      );
-    }
-    if (!res.ok) {
-      if (res.status === 404 && path.startsWith('/api/devices') && /not found/i.test(String(data?.error || '')) && !data?.code) {
-        throw new DeviceApiError(`The backend at ${host} does not have the Devices feature yet. It needs to be redeployed with the latest code.`, 404, 'OLD_BACKEND');
-      }
-      throw new DeviceApiError(data?.error || `Request failed (${res.status})`, res.status, data?.code);
-    }
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new DeviceApiError(data?.error || `Request failed (${res.status})`, res.status, data?.code);
     return data;
   } catch (err: any) {
     if (err instanceof DeviceApiError) throw err;
-    throw new DeviceApiError(
-      err?.name === 'AbortError' ? `The server at ${host} took too long to respond.` : `Could not reach ${host}. If it is a free Render server it may be waking up.`,
-      0,
-      'NETWORK'
-    );
+    throw new DeviceApiError(err?.name === 'AbortError' ? 'The server took too long to respond.' : 'Could not reach the server.', 0, 'NETWORK');
   } finally {
     clearTimeout(timer);
   }
