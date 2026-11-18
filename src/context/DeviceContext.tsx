@@ -79,6 +79,7 @@ interface DeviceContextValue {
   identity: DeviceIdentity | null;
   settings: DeviceSettings;
   connection: ConnectionState;
+  connectionError: string | null;
   incoming: TransferInfo[];
   outgoing: TransferInfo[];
   requests: DirectRequest[];
@@ -119,6 +120,7 @@ export const DeviceProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [identity, setIdentity] = useState<DeviceIdentity | null>(() => readIdentity());
   const [settings, setSettings] = useState<DeviceSettings>(DEFAULT_SETTINGS);
   const [connection, setConnection] = useState<ConnectionState>('idle');
+  const [connectionError, setConnectionError] = useState<string | null>(null);
   const [incoming, setIncoming] = useState<TransferInfo[]>([]);
   const [outgoing, setOutgoing] = useState<TransferInfo[]>([]);
   const [requests, setRequests] = useState<DirectRequest[]>([]);
@@ -243,6 +245,7 @@ export const DeviceProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setConnection('connecting');
     try {
       const { identity: id, settings: s } = await registerDevice();
+      setConnectionError(null);
       identityRef.current = id;
       setIdentity(id);
       setSettings(s);
@@ -252,6 +255,7 @@ export const DeviceProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       await refreshInbox();
     } catch (err) {
       console.warn('Device connection failed:', err);
+      setConnectionError((err as any)?.message || 'Could not connect.');
       setConnection('offline');
       scheduleRetry();
     } finally {
@@ -533,6 +537,7 @@ export const DeviceProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       identity,
       settings,
       connection,
+      connectionError,
       incoming,
       outgoing,
       requests,
@@ -554,7 +559,7 @@ export const DeviceProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       dismissReceived,
       clearFinishedSends,
     }),
-    [identity, settings, connection, incoming, outgoing, requests, receives, received, sends, pendingCount, enable, refreshInbox, lookup, sendFiles, respond, removeTransfer, downloadTransfer, updateSettings, rotateId, acceptRequest, declineRequest, dismissReceived, clearFinishedSends]
+    [identity, settings, connection, connectionError, incoming, outgoing, requests, receives, received, sends, pendingCount, enable, refreshInbox, lookup, sendFiles, respond, removeTransfer, downloadTransfer, updateSettings, rotateId, acceptRequest, declineRequest, dismissReceived, clearFinishedSends]
   );
 
   return <DeviceContext.Provider value={value}>{children}</DeviceContext.Provider>;
