@@ -42,7 +42,7 @@ const CONNECTION_LABEL: Record<string, { text: string; cls: string }> = {
 
 export const DevicesPage: React.FC<DevicesPageProps> = ({ onBack }) => {
   const dev = useDevices();
-  const { identity, settings, connection } = dev;
+  const { identity, settings, connection, connectionError } = dev;
 
   const [toast, setToast] = useState<{ type: 'ok' | 'err'; text: string } | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -101,6 +101,7 @@ export const DevicesPage: React.FC<DevicesPageProps> = ({ onBack }) => {
   const [dragging, setDragging] = useState(false);
   const [sending, setSending] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
+  const autoSend = useRef(false); // true when files were picked after a valid ID was already entered
 
   const runLookup = useCallback(
     async (id: string) => {
@@ -130,7 +131,8 @@ export const DevicesPage: React.FC<DevicesPageProps> = ({ onBack }) => {
   }, [target]);
 
   const addFiles = (list: FileList | File[] | null) => {
-    if (!list) return;
+    if (!list || (Array.isArray(list) ? list.length === 0 : (list as FileList).length === 0)) return;
+    if (isCompleteDeviceId(target)) autoSend.current = true;
     setFiles((prev) => {
       const next = [...prev];
       for (const f of Array.from(list)) {
@@ -142,7 +144,8 @@ export const DevicesPage: React.FC<DevicesPageProps> = ({ onBack }) => {
 
   const isSelf = identity && formatDeviceId(target) === identity.deviceId;
   const target_ok = !!lookup.result?.exists && !isSelf;
-  const canSend = target_ok && files.length > 0 && !sending && connection === 'online';
+  // The live connection is only needed for direct sends; without it the file goes through the server inbox.
+  const canSend = target_ok && files.length > 0 && !sending && !!identity;
 
   const doSend = async () => {
     if (!canSend) return;
@@ -157,6 +160,15 @@ export const DevicesPage: React.FC<DevicesPageProps> = ({ onBack }) => {
       setSending(false);
     }
   };
+
+  // Picking files after entering a valid ID sends them straight away (no extra click).
+  useEffect(() => {
+    if (autoSend.current && canSend) {
+      autoSend.current = false;
+      void doSend();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [files, canSend]);
 
   // ---------- inbox actions ----------
   const [busy, setBusy] = useState<Record<string, boolean>>({});
@@ -197,7 +209,7 @@ export const DevicesPage: React.FC<DevicesPageProps> = ({ onBack }) => {
         <div role="alert" className="flex items-center justify-between gap-3 px-4 py-3 bg-red-50 border border-red-200 text-red-700 rounded-2xl text-xs">
           <span className="flex items-center space-x-2">
             <WifiOff className="w-4 h-4 shrink-0" />
-            <span>Could not reach the server to create your device ID. It may be waking up, we will keep trying.</span>
+            <span>{connectionError || 'Could not reach the server to create your device ID.'} We will keep trying.</span>
           </span>
         </div>
       )}
@@ -360,7 +372,9 @@ export const DevicesPage: React.FC<DevicesPageProps> = ({ onBack }) => {
             {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
             <span>{sending ? 'Starting…' : files.length > 1 ? `Send ${files.length} files` : 'Send file'}</span>
           </button>
-          {connection !== 'online' && <p className="text-[11px] text-amber-700 text-center">Waiting for the connection before you can send.</p>}
+          {identity && connection !== 'online' && <p className="text-[11px] text-amber-700 text-center">Live connection is reconnecting. Files will be sent through the server inbox.</p>}
+          {!identity && <p className="text-[11px] text-amber-700 text-center">Waiting for your device ID before you can send.</p>}
+          {isCompleteDeviceId(target) && !lookup.loading && lookup.result && !lookup.result.exists && <p className="text-[11px] text-red-600 text-center">No device found with that ID.</p>}
 
           {hasWork && (
             <div className="space-y-2 pt-2">

@@ -6,7 +6,7 @@ Spark plan = static hosting + Firestore only (no Cloud Run / Cloud Functions). M
 Node backend for uploads, passwords and zip downloads, so:
 
     Browser -> maketransfer.web.app (Firebase Hosting, static site)
-            -> https://maketranfer.onrender.com (Node server, Render free plan)
+            -> https://mkaetransfer.onrender.com (Node server, Render free plan)
             -> Firestore in makebytechd (files and links are stored here, so nothing is lost on restart)
 
 ## A. One-time setup
@@ -52,7 +52,7 @@ npm run dev        # http://localhost:3000 (frontend + backend together)
   as `RENDER_EXTERNAL_URL`; set `KEEP_ALIVE_URL` only if you want to override it. Look for `[keep-alive]` in the logs.
 - The website also pings the server when it opens and every 14 minutes while a tab stays open, so the server
   starts waking up before the first request.
-- Backup: add a free monitor at uptimerobot.com (HTTP, every 5 minutes) on `https://maketranfer.onrender.com/api/health`.
+- Backup: add a free monitor at uptimerobot.com (HTTP, every 5 minutes) on `https://mkaetransfer.onrender.com/api/health`.
 - Render's free plan includes about 750 instance hours per month **shared by all free web services in your account**.
   One always-on service uses about 744 hours. If MakeQR (or any other free service) also runs on Render, keeping both
   awake all month exceeds the allowance and Render suspends services until the next month.
