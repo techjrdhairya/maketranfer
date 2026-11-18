@@ -32,6 +32,28 @@ import {
   sendFilesP2P,
 } from '../lib/p2p';
 import { removeMyUpload, uploadFile } from '../lib/api';
+import { alertIncoming } from '../lib/alerts';
+import { logActivity } from '../lib/activity';
+
+const MAX_SERVER_FILE_BYTES = 50 * 1024 * 1024; // server inbox limit per file
+
+/** Smoothed transfer speed + time left, from bytes sent so far. */
+function speedTracker() {
+  let lastT = 0;
+  let lastBytes = 0;
+  let ema = 0;
+  return (sent: number, total: number): { speed?: number; eta?: number } => {
+    const now = Date.now();
+    if (!lastT) { lastT = now; lastBytes = sent; }
+    if (now - lastT >= 500) {
+      const inst = (sent - lastBytes) / ((now - lastT) / 1000);
+      ema = ema ? ema * 0.7 + inst * 0.3 : inst;
+      lastT = now;
+      lastBytes = sent;
+    }
+    return ema > 0 ? { speed: ema, eta: Math.max(0, Math.round((total - sent) / ema)) } : {};
+  };
+}
 
 export type ConnectionState = 'idle' | 'connecting' | 'online' | 'offline';
 
@@ -72,6 +94,9 @@ export interface SendJob {
   mode: 'direct' | 'server';
   status: 'queued' | 'waiting' | 'connecting' | 'sending' | 'done' | 'error' | 'declined';
   progress: number;
+  group: string; // jobs sent together share a group (cancel applies to the group)
+  speed?: number; // bytes per second
+  eta?: number; // seconds left
   error?: string;
 }
 
@@ -100,6 +125,7 @@ interface DeviceContextValue {
   declineRequest: (tid: string) => Promise<void>;
   dismissReceived: (id: string) => void;
   clearFinishedSends: () => void;
+  cancelSend: (jobId: string) => void;
 }
 
 const DEFAULT_SETTINGS: DeviceSettings = { allowAnyone: true, trusted: [], blocked: [] };
@@ -127,6 +153,12 @@ export const DeviceProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const [receives, setReceives] = useState<DirectReceive[]>([]);
   const [received, setReceived] = useState<ReceivedFile[]>([]);
   const [sends, setSends] = useState<SendJob[]>([]);
+  const incomingRef = useRef<TransferInfo[]>([]);
+  incomingRef.current = incoming;
+  const sendsRef = useRef<SendJob[]>([]);
+  sendsRef.current = sends;
+  const cancelledGroups = useRef<Set<string>>(new Set());
+  const alertedRef = useRef<Set<string>>(new Set());
 
   const identityRef = useRef<DeviceIdentity | null>(identity);
   const sidRef = useRef<string | null>(null);
@@ -309,8 +341,10 @@ export const DeviceProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       if (!info.exists) throw new Error('No device found with that ID.');
 
       const direct = !!info.online && isP2PSupported() && !!sidRef.current;
+      const group = rid();
       const jobs: SendJob[] = files.map((f) => ({
         id: rid(),
+        group,
         toId,
         toName: info.name,
         fileName: f.name,
@@ -325,8 +359,11 @@ export const DeviceProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       const updateAll = (patch: Partial<SendJob>) => jobs.forEach((j) => update(j.id, patch));
 
       // 1) Both online: send directly device-to-device
+      let startIndex = 0; // files before this were already delivered directly
       if (direct) {
         let reachedSending = false;
+        let lastIdx = 0;
+        const track = speedTracker();
         const tid = rid();
         try {
           await sendFilesP2P({
@@ -341,15 +378,25 @@ export const DeviceProvider: React.FC<{ children: React.ReactNode }> = ({ childr
               if (s === 'sending') reachedSending = true;
               updateAll({ status: s });
             },
-            onProgress: (idx, pct) =>
-              jobs.forEach((j, i) => update(j.id, { progress: i < idx ? 100 : i === idx ? pct : 0 })),
-            isAborted: () => false,
+            onProgress: (idx, pct) => {
+              lastIdx = idx;
+              const total = files.reduce((n, f) => n + f.size, 0);
+              const sent = files.reduce((n, f, i) => n + (i < idx ? f.size : i === idx ? (f.size * pct) / 100 : 0), 0);
+              const stats = track(sent, total);
+              jobs.forEach((j, i) => update(j.id, { progress: i < idx ? 100 : i === idx ? pct : 0, ...stats }));
+            },
+            isAborted: () => cancelledGroups.current.has(group),
           });
-          updateAll({ status: 'done', progress: 100 });
+          updateAll({ status: 'done', progress: 100, speed: undefined, eta: undefined });
+          files.forEach((f) => logActivity({ dir: 'sent', name: f.name, size: f.size, peerName: info.name || toId, peerId: toId, mode: 'direct' }));
           return;
         } catch (err: any) {
           if (err instanceof P2PError && err.code === 'DECLINED') {
             updateAll({ status: 'declined', error: `${info.name || toId} declined the transfer.` });
+            return;
+          }
+          if (err instanceof P2PError && err.code === 'ABORTED') {
+            updateAll({ status: 'error', error: 'Cancelled.', speed: undefined, eta: undefined });
             return;
           }
           if (err instanceof DeviceApiError && err.status === 403) {
@@ -357,23 +404,46 @@ export const DeviceProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             return;
           }
           if (reachedSending) {
-            updateAll({ status: 'error', error: err?.message || 'The direct transfer was interrupted.' });
-            return;
+            // The connection dropped part-way: finish the remaining files through the server inbox when they fit
+            const rest = files.slice(lastIdx);
+            if (rest.length > 0 && rest.every((f) => f.size <= MAX_SERVER_FILE_BYTES)) {
+              jobs.forEach((j, i) => {
+                if (i < lastIdx) {
+                  update(j.id, { status: 'done', progress: 100, speed: undefined, eta: undefined });
+                  logActivity({ dir: 'sent', name: files[i].name, size: files[i].size, peerName: info.name || toId, peerId: toId, mode: 'direct' });
+                } else {
+                  update(j.id, { mode: 'server', status: 'queued', progress: 0, error: undefined, speed: undefined, eta: undefined });
+                }
+              });
+              startIndex = lastIdx;
+            } else {
+              updateAll({ status: 'error', error: err?.message || 'The direct transfer was interrupted.', speed: undefined, eta: undefined });
+              return;
+            }
+          } else {
+            // Direct connection could not be set up: fall back to the server inbox
+            updateAll({ mode: 'server', status: 'queued', progress: 0, error: undefined });
           }
-          // Direct connection could not be set up: fall back to the server inbox
-          updateAll({ mode: 'server', status: 'queued', progress: 0, error: undefined });
         }
       }
 
       // 2) Receiver offline (or direct failed): upload and deliver to their inbox
-      for (let i = 0; i < files.length; i++) {
+      for (let i = startIndex; i < files.length; i++) {
         const job = jobs[i];
+        if (cancelledGroups.current.has(group)) {
+          update(job.id, { status: 'error', error: 'Cancelled.' });
+          continue;
+        }
         try {
           update(job.id, { status: 'sending', mode: 'server', progress: 0 });
-          const up = await uploadFile(files[i], undefined, (pct) => update(job.id, { progress: Math.round(pct * 0.9) }));
+          const trackUpload = speedTracker();
+          const up = await uploadFile(files[i], undefined, (pct) =>
+            update(job.id, { progress: Math.round(pct * 0.9), ...trackUpload((files[i].size * pct) / 100, files[i].size) })
+          );
           await sendTransferViaServer(me, toId, up.document.slug, up.managementToken);
           removeMyUpload(up.document.slug); // now owned by the receiver
-          update(job.id, { status: 'done', progress: 100 });
+          update(job.id, { status: 'done', progress: 100, speed: undefined, eta: undefined });
+          logActivity({ dir: 'sent', name: files[i].name, size: files[i].size, peerName: info.name || toId, peerId: toId, mode: 'server' });
         } catch (err: any) {
           update(job.id, { status: 'error', error: err?.message || 'Could not send this file.' });
         }
@@ -408,6 +478,8 @@ export const DeviceProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     const id = identityRef.current;
     if (!id) return;
     if (!sidRef.current) sidRef.current = await createSession(id);
+    const t = incomingRef.current.find((x) => x.id === tid);
+    if (t) logActivity({ dir: 'received', name: t.filename, size: t.size, peerName: t.fromName, peerId: t.fromId, mode: 'server' });
     const a = document.createElement('a');
     a.href = transferDownloadUrl(tid, sidRef.current);
     a.rel = 'noopener';
@@ -490,6 +562,7 @@ export const DeviceProvider: React.FC<{ children: React.ReactNode }> = ({ childr
             receivedAt: Date.now(),
           };
           setReceived((prev) => [entry, ...prev]);
+          logActivity({ dir: 'received', name: f.name, size: f.size, peerName: req.fromName, peerId: req.fromId, mode: 'direct' });
         },
         onDone: () => {
           updateReceive({ status: 'done', percent: 100 });
@@ -526,6 +599,36 @@ export const DeviceProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     });
   }, []);
 
+  // Stops a direct transfer immediately; for server uploads it stops after the file being uploaded.
+  const cancelSend = useCallback((jobId: string) => {
+    const job = sendsRef.current.find((j) => j.id === jobId);
+    if (!job) return;
+    cancelledGroups.current.add(job.group);
+    setSends((prev) => prev.map((j) => (j.group === job.group && j.status === 'queued' ? { ...j, status: 'error', error: 'Cancelled.' } : j)));
+  }, []);
+
+  // Sound / vibration / notification when something arrives
+  useEffect(() => {
+    for (const r of requests) {
+      const key = `req:${r.id}`;
+      if (alertedRef.current.has(key)) continue;
+      alertedRef.current.add(key);
+      const n = r.files.length;
+      alertIncoming(`${r.fromName} wants to send you ${n === 1 ? r.files[0]?.name || 'a file' : `${n} files`}`, 'Open MakeTransfer to accept or decline.', key);
+    }
+  }, [requests]);
+
+  useEffect(() => {
+    for (const t of incoming) {
+      if (t.status !== 'pending' && t.status !== 'accepted') continue;
+      const key = `tr:${t.id}`;
+      if (alertedRef.current.has(key)) continue;
+      alertedRef.current.add(key);
+      if (Date.now() - Date.parse(t.createdAt) > 2 * 60 * 1000) continue; // already waiting when the page opened
+      alertIncoming(`${t.fromName} sent you ${t.filename}`, t.status === 'pending' ? 'Open MakeTransfer to accept or decline.' : 'Ready to download.', key);
+    }
+  }, [incoming]);
+
   const clearFinishedSends = useCallback(() => {
     setSends((prev) => prev.filter((j) => j.status === 'queued' || j.status === 'waiting' || j.status === 'connecting' || j.status === 'sending'));
   }, []);
@@ -558,8 +661,9 @@ export const DeviceProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       declineRequest,
       dismissReceived,
       clearFinishedSends,
+      cancelSend,
     }),
-    [identity, settings, connection, connectionError, incoming, outgoing, requests, receives, received, sends, pendingCount, enable, refreshInbox, lookup, sendFiles, respond, removeTransfer, downloadTransfer, updateSettings, rotateId, acceptRequest, declineRequest, dismissReceived, clearFinishedSends]
+    [identity, settings, connection, connectionError, incoming, outgoing, requests, receives, received, sends, pendingCount, enable, refreshInbox, lookup, sendFiles, respond, removeTransfer, downloadTransfer, updateSettings, rotateId, acceptRequest, declineRequest, dismissReceived, clearFinishedSends, cancelSend]
   );
 
   return <DeviceContext.Provider value={value}>{children}</DeviceContext.Provider>;

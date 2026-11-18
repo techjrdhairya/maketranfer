@@ -1,10 +1,17 @@
 // Direct device-to-device file transfer over a WebRTC data channel.
 // Signalling (offer / answer / ICE) is relayed by the MakeTransfer server; the file itself never touches it.
 
+// Optional TURN relay for networks where a direct connection is impossible (strict NAT / firewalls).
+// Set VITE_TURN_URL (comma separated, e.g. "turn:turn.example.com:3478,turns:turn.example.com:443"),
+// VITE_TURN_USER and VITE_TURN_CREDENTIAL at build time. Without them only STUN is used.
+const turnEnv = ((import.meta as any).env || {}) as Record<string, string | undefined>;
+const turnUrls = String(turnEnv.VITE_TURN_URL || '').split(',').map((u) => u.trim()).filter(Boolean);
+
 export const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
   { urls: 'stun:stun.cloudflare.com:3478' },
+  ...(turnUrls.length ? [{ urls: turnUrls, username: turnEnv.VITE_TURN_USER, credential: turnEnv.VITE_TURN_CREDENTIAL } as RTCIceServer] : []),
 ];
 
 const CHUNK_SIZE = 64 * 1024;

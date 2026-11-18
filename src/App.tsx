@@ -34,7 +34,13 @@ export default function App() {
   // Parse path on initial load or popstate
   useEffect(() => {
     const parseUrl = () => {
-      const path = window.location.pathname;
+      let path = window.location.pathname;
+      const shortSend = path.match(/^\/to\/([A-Za-z0-9-]{3,12})\/?$/);
+      if (shortSend) {
+        // Short send link (QR codes and "Copy send link"): open Devices with that receiver filled in
+        window.history.replaceState({}, '', `/devices?to=${encodeURIComponent(shortSend[1].toUpperCase())}`);
+        path = '/devices';
+      }
       const searchParams = new URLSearchParams(window.location.search);
       const querySlug = searchParams.get('d');
 

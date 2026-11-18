@@ -2,14 +2,21 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import QRCode from 'qrcode';
 import {
   AlertTriangle,
+  ArrowDownLeft,
   ArrowLeft,
+  ArrowUpRight,
   Ban,
+  Bell,
+  BellOff,
   Check,
   CheckCircle2,
   Clock,
   Copy,
   Download,
+  ExternalLink,
   FileText,
+  FolderUp,
+  History,
   Inbox,
   Link2,
   Loader2,
@@ -17,6 +24,8 @@ import {
   RefreshCw,
   Send,
   ShieldCheck,
+  Star,
+  StickyNote,
   Trash2,
   UploadCloud,
   Wifi,
@@ -28,6 +37,22 @@ import { useDevices, SendJob } from '../context/DeviceContext';
 import { LookupResult, TransferInfo, formatDeviceId, isCompleteDeviceId } from '../lib/devices';
 import { getEffectiveBaseUrl } from '../lib/api';
 import { formatBytes, formatDate, formatTimeRemaining } from '../lib/format';
+import { RecentDevice, forgetDevice, getRecentDevices, rememberDevice, toggleFavorite } from '../lib/recents';
+import { zipEntries } from '../lib/zip';
+import { ActivityItem, clearActivity, getActivity } from '../lib/activity';
+import { enableNotifications, getAlertPrefs, notificationState, setAlertPrefs } from '../lib/alerts';
+
+const SHARE_CACHE = 'mt-share-v1'; // filled by the service worker when files are shared to the installed app
+
+// Only types that are safe to open from a blob: URL in a new tab (never HTML or SVG, which could run scripts).
+const SAFE_PREVIEW = /^(image\/(png|jpe?g|gif|webp|bmp|avif)|application\/pdf|video\/(mp4|webm|quicktime)|audio\/(mpeg|mp3|wav|ogg|webm|mp4|x-m4a)|text\/plain)$/i;
+const canPreview = (type?: string) => !!type && SAFE_PREVIEW.test(type.split(';')[0].trim());
+
+function formatEta(sec: number): string {
+  if (sec < 60) return `${Math.max(1, sec)}s`;
+  const m = Math.floor(sec / 60);
+  return m < 60 ? `${m}m ${sec % 60}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
+}
 
 interface DevicesPageProps {
   onBack: () => void;
@@ -67,14 +92,14 @@ export const DevicesPage: React.FC<DevicesPageProps> = ({ onBack }) => {
 
   useEffect(() => {
     if (!identity) return;
-    QRCode.toDataURL(`${baseUrl}/devices?to=${identity.deviceId}`, { width: 240, margin: 1, color: { dark: '#0f172a', light: '#ffffff' } })
+    QRCode.toDataURL(`${baseUrl}/to/${identity.deviceId}`, { width: 240, margin: 1, color: { dark: '#0f172a', light: '#ffffff' } })
       .then(setQr)
       .catch(() => setQr(''));
   }, [identity?.deviceId, baseUrl]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const copy = (what: 'id' | 'link') => {
     if (!identity) return;
-    navigator.clipboard?.writeText(what === 'id' ? identity.deviceId : `${baseUrl}/devices?to=${identity.deviceId}`);
+    navigator.clipboard?.writeText(what === 'id' ? identity.deviceId : `${baseUrl}/to/${identity.deviceId}`);
     setCopied(what);
     setTimeout(() => setCopied(null), 1800);
   };
@@ -102,6 +127,15 @@ export const DevicesPage: React.FC<DevicesPageProps> = ({ onBack }) => {
   const [sending, setSending] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   const autoSend = useRef(false); // true when files were picked after a valid ID was already entered
+  const [recents, setRecents] = useState<RecentDevice[]>(() => getRecentDevices());
+  const folderInput = useRef<HTMLInputElement>(null);
+  const [zipping, setZipping] = useState(false);
+  const [activity, setActivity] = useState<ActivityItem[]>(() => getActivity());
+  const [activityOpen, setActivityOpen] = useState(false);
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [noteText, setNoteText] = useState('');
+  const [alertPrefs, setAlertPrefsState] = useState(getAlertPrefs);
+  const [notifState, setNotifState] = useState(notificationState);
 
   const runLookup = useCallback(
     async (id: string) => {
@@ -156,6 +190,10 @@ export const DevicesPage: React.FC<DevicesPageProps> = ({ onBack }) => {
     try {
       const batch = files;
       setFiles([]);
+      if (lookup.result?.exists) {
+        rememberDevice(formatDeviceId(target), lookup.result.name || target);
+        setRecents(getRecentDevices());
+      }
       await dev.sendFiles(target, batch);
     } catch (e: any) {
       showToast('err', e?.message || 'Could not send.');
@@ -163,6 +201,103 @@ export const DevicesPage: React.FC<DevicesPageProps> = ({ onBack }) => {
       setSending(false);
     }
   };
+
+  const sendNote = () => {
+    const text = noteText.trim();
+    if (!text) return;
+    const isLink = /^https?:\/\/\S+$/i.test(text);
+    const stamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }).replace(/[^0-9A-Za-z]+/g, '-').replace(/^-|-$/g, '');
+    const file = new File([text], `${isLink ? 'Link' : 'Note'} ${stamp}.txt`, { type: 'text/plain', lastModified: Date.now() });
+    if (isCompleteDeviceId(target)) autoSend.current = true;
+    setFiles((p) => [...p, file]);
+    setNoteText('');
+    setNoteOpen(false);
+  };
+
+  // Folder: zipped in the browser (no compression) and staged as a single .zip file
+  const addFolder = async (list: FileList | null) => {
+    const picked = list ? Array.from(list) : []; // copy first: the input's FileList is live
+    const entries = picked
+      .map((f) => ({ path: (f as any).webkitRelativePath || f.name, file: f }))
+      .filter((e) => !/(^|\/)(\.DS_Store|Thumbs\.db)$/i.test(e.path));
+    if (entries.length === 0) return;
+    const root = entries[0].path.split('/')[0] || 'Folder';
+    setZipping(true);
+    try {
+      const zip = await zipEntries(entries, `${root}.zip`);
+      addFiles([zip]);
+      showToast('ok', `Zipped “${root}” (${entries.length} files).`);
+    } catch (e: any) {
+      showToast('err', e?.message || 'Could not zip that folder.');
+    } finally {
+      setZipping(false);
+    }
+  };
+
+  useEffect(() => {
+    const refresh = () => setActivity(getActivity());
+    window.addEventListener('maketransfer:activity_updated', refresh);
+    return () => window.removeEventListener('maketransfer:activity_updated', refresh);
+  }, []);
+
+  // Paste a screenshot / file anywhere on the page to stage it; pasted text opens the note box.
+  useEffect(() => {
+    const onPaste = (e: ClipboardEvent) => {
+      const el = document.activeElement as HTMLElement | null;
+      const typing = !!el && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && (el as HTMLInputElement).type !== 'file'));
+      const pasted = Array.from(e.clipboardData?.files || []);
+      if (pasted.length > 0) {
+        e.preventDefault();
+        const stamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }).replace(/[^0-9A-Za-z]+/g, '-').replace(/^-|-$/g, '');
+        addFiles(
+          pasted.map((f, i) => {
+            if (f.name && f.name !== 'image.png') return f;
+            const ext = (f.type.split('/')[1] || 'png').replace('jpeg', 'jpg');
+            return new File([f], `Pasted ${stamp}${pasted.length > 1 ? `-${i + 1}` : ''}.${ext}`, { type: f.type, lastModified: Date.now() });
+          })
+        );
+        return;
+      }
+      const text = e.clipboardData?.getData('text/plain');
+      if (text && text.trim() && !typing) {
+        e.preventDefault();
+        setNoteOpen(true);
+        setNoteText((prev) => (prev ? `${prev}\n${text}` : text));
+      }
+    };
+    document.addEventListener('paste', onPaste);
+    return () => document.removeEventListener('paste', onPaste);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target]);
+
+  // Files / text shared to the installed app (Android "Share" menu) arrive through the service worker.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (!params.get('shared')) return;
+    (async () => {
+      const text = params.get('text');
+      if (text) { setNoteOpen(true); setNoteText(text); }
+      try {
+        if ('caches' in window) {
+          const cache = await caches.open(SHARE_CACHE);
+          const got: File[] = [];
+          for (const req of await cache.keys()) {
+            const res = await cache.match(req);
+            if (!res) continue;
+            const blob = await res.blob();
+            got.push(new File([blob], decodeURIComponent(res.headers.get('X-File-Name') || 'shared-file'), { type: blob.type, lastModified: Number(res.headers.get('X-Last-Modified')) || Date.now() }));
+            await cache.delete(req);
+          }
+          if (got.length) addFiles(got);
+        }
+      } catch { /* nothing shared */ }
+      params.delete('shared');
+      params.delete('text');
+      const qs = params.toString();
+      window.history.replaceState({}, '', `/devices${qs ? `?${qs}` : ''}`);
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Picking files after entering a valid ID sends them straight away (no extra click).
   useEffect(() => {
@@ -331,6 +466,34 @@ export const DevicesPage: React.FC<DevicesPageProps> = ({ onBack }) => {
             </div>
           </div>
 
+          {recents.length > 0 && (
+            <div className="flex flex-wrap gap-2" aria-label="Recent devices">
+              {recents.map((r) => {
+                const active = formatDeviceId(target) === r.id;
+                return (
+                  <span key={r.id} className={`inline-flex items-center rounded-full border text-xs font-semibold overflow-hidden ${active ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-stone-200 text-stone-700'}`}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (files.length > 0) autoSend.current = true;
+                        setTarget(r.id);
+                      }}
+                      className="pl-3 pr-2 py-1.5 cursor-pointer"
+                    >
+                      {r.name} <span className={`font-mono text-[10px] ml-1 ${active ? 'text-white/70' : 'text-stone-400'}`}>{r.id}</span>
+                    </button>
+                    <button type="button" onClick={() => { toggleFavorite(r.id); setRecents(getRecentDevices()); }} aria-label={r.favorite ? `Unstar ${r.name}` : `Star ${r.name}`} className="px-1.5 py-1.5 cursor-pointer">
+                      <Star className={`w-3.5 h-3.5 ${r.favorite ? 'fill-amber-400 text-amber-500' : active ? 'text-white/60' : 'text-stone-300'}`} />
+                    </button>
+                    <button type="button" onClick={() => { forgetDevice(r.id); setRecents(getRecentDevices()); }} aria-label={`Forget ${r.name}`} className={`pr-2 py-1.5 cursor-pointer ${active ? 'text-white/60' : 'text-stone-300 hover:text-stone-600'}`}>
+                      <X className="w-3 h-3" />
+                    </button>
+                  </span>
+                );
+              })}
+            </div>
+          )}
+
           {/* Drop zone */}
           <div
             onDragOver={(e) => {
@@ -366,6 +529,44 @@ export const DevicesPage: React.FC<DevicesPageProps> = ({ onBack }) => {
             </ul>
           )}
 
+          <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+            <button type="button" onClick={() => folderInput.current?.click()} disabled={zipping} className="inline-flex items-center space-x-1.5 text-xs font-semibold text-indigo-600 hover:text-indigo-800 cursor-pointer disabled:opacity-50">
+              {zipping ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FolderUp className="w-3.5 h-3.5" />}
+              <span>{zipping ? 'Zipping folder…' : 'Send a folder (zipped)'}</span>
+            </button>
+            <input
+              ref={folderInput}
+              type="file"
+              multiple
+              className="hidden"
+              {...({ webkitdirectory: '', directory: '' } as any)}
+              onChange={(e) => { void addFolder(e.target.files); e.target.value = ''; }}
+            />
+          </div>
+
+          <div>
+            <button type="button" onClick={() => setNoteOpen((o) => !o)} className="inline-flex items-center space-x-1.5 text-xs font-semibold text-indigo-600 hover:text-indigo-800 cursor-pointer">
+              <StickyNote className="w-3.5 h-3.5" />
+              <span>{noteOpen ? 'Hide note' : 'Send a note or link'}</span>
+            </button>
+            {noteOpen && (
+              <div className="mt-2 space-y-2">
+                <textarea
+                  value={noteText}
+                  onChange={(e) => setNoteText(e.target.value)}
+                  rows={3}
+                  maxLength={5000}
+                  placeholder="Paste a link, a password or any text…"
+                  className="w-full px-3 py-2.5 bg-stone-50 border border-stone-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/30 focus:border-indigo-400 resize-y"
+                />
+                <button type="button" onClick={sendNote} disabled={!noteText.trim()} className="px-3.5 py-2 bg-stone-900 hover:bg-stone-800 text-white rounded-lg text-xs font-bold cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">
+                  {isCompleteDeviceId(target) ? 'Send note' : 'Add note'}
+                </button>
+                <p className="text-[11px] text-stone-400">Sent as a small text file the receiver can open or copy from.</p>
+              </div>
+            )}
+          </div>
+
           <button
             type="button"
             onClick={doSend}
@@ -385,7 +586,7 @@ export const DevicesPage: React.FC<DevicesPageProps> = ({ onBack }) => {
                 <h3 className="text-xs font-bold text-stone-700">Transfers</h3>
                 <button type="button" onClick={dev.clearFinishedSends} className="text-[11px] font-semibold text-stone-400 hover:text-stone-700 cursor-pointer">Clear finished</button>
               </div>
-              {dev.sends.map((j) => <SendRow key={j.id} job={j} />)}
+              {dev.sends.map((j) => <SendRow key={j.id} job={j} onCancel={() => dev.cancelSend(j.id)} />)}
             </div>
           )}
         </section>
@@ -407,6 +608,11 @@ export const DevicesPage: React.FC<DevicesPageProps> = ({ onBack }) => {
                   <p className="text-[11px] text-stone-500">from {f.fromName} • {formatBytes(f.size)}</p>
                 </div>
                 <div className="flex items-center gap-2">
+                  {f.blobUrl && canPreview(f.type) && (
+                    <a href={f.blobUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center space-x-1.5 px-3 py-1.5 bg-white border border-stone-300 hover:bg-stone-50 text-stone-700 rounded-lg text-xs font-bold">
+                      <ExternalLink className="w-3.5 h-3.5" /><span>Open</span>
+                    </a>
+                  )}
                   {f.savedToDisk ? (
                     <span className="inline-flex items-center space-x-1.5 text-xs font-semibold text-emerald-700"><CheckCircle2 className="w-4 h-4" /><span>Saved to disk</span></span>
                   ) : (
@@ -475,6 +681,45 @@ export const DevicesPage: React.FC<DevicesPageProps> = ({ onBack }) => {
       </section>
 
       {/* Privacy */}
+      {/* Activity (this browser only, 30 days) */}
+      <section className="bg-white border border-stone-200 rounded-3xl p-6 space-y-3">
+        <button type="button" onClick={() => setActivityOpen((o) => !o)} className="w-full flex items-center justify-between gap-3 cursor-pointer text-left">
+          <span className="flex items-center space-x-2">
+            <span className="w-8 h-8 rounded-lg bg-stone-100 text-stone-600 flex items-center justify-center"><History className="w-4 h-4" /></span>
+            <span className="text-base font-bold text-stone-900">Activity</span>
+            <span className="text-xs text-stone-400">last 30 days • {activity.length}</span>
+          </span>
+          <span className="text-xs font-semibold text-indigo-600">{activityOpen ? 'Hide' : 'Show'}</span>
+        </button>
+        {activityOpen && (activity.length === 0 ? (
+          <p className="text-xs text-stone-500">Nothing yet. Files you send and receive in this browser will be listed here.</p>
+        ) : (
+          <>
+            <ul className="divide-y divide-stone-100">
+              {activity.slice(0, 50).map((a) => (
+                <li key={a.id} className="py-2.5 flex items-center justify-between gap-3">
+                  <span className="flex items-center gap-3 min-w-0">
+                    <span className={`w-7 h-7 rounded-lg flex items-center justify-center shrink-0 ${a.dir === 'sent' ? 'bg-indigo-50 text-indigo-600' : 'bg-emerald-50 text-emerald-600'}`}>
+                      {a.dir === 'sent' ? <ArrowUpRight className="w-4 h-4" /> : <ArrowDownLeft className="w-4 h-4" />}
+                    </span>
+                    <span className="min-w-0">
+                      <span className="block text-sm font-semibold text-stone-800 truncate">{a.name}</span>
+                      <span className="block text-[11px] text-stone-500">
+                        {a.dir === 'sent' ? 'to' : 'from'} {a.peerName} • {formatBytes(a.size)} • {a.mode === 'direct' ? 'Direct' : 'Via server'} • {new Date(a.at).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+                      </span>
+                    </span>
+                  </span>
+                  {a.dir === 'received' && a.peerId && !settings.blocked.includes(a.peerId) && (
+                    <button type="button" onClick={() => run(`blk${a.id}`, () => dev.updateSettings({ block: a.peerId! }), `Blocked ${a.peerName}.`)} className="text-[11px] font-bold text-red-600 hover:text-red-700 shrink-0 cursor-pointer">Report & block</button>
+                  )}
+                </li>
+              ))}
+            </ul>
+            <button type="button" onClick={clearActivity} className="text-[11px] font-semibold text-stone-400 hover:text-stone-700 cursor-pointer">Clear activity</button>
+          </>
+        ))}
+      </section>
+
       <section className="bg-white border border-stone-200 rounded-3xl p-6 space-y-5">
         <div className="flex items-center space-x-2">
           <span className="w-8 h-8 rounded-lg bg-stone-100 text-stone-600 flex items-center justify-center"><ShieldCheck className="w-4 h-4" /></span>
@@ -493,6 +738,33 @@ export const DevicesPage: React.FC<DevicesPageProps> = ({ onBack }) => {
             className="mt-1 w-5 h-5 accent-indigo-600 cursor-pointer shrink-0"
           />
         </label>
+
+        <div className="pt-4 border-t border-stone-100 space-y-3">
+          <p className="text-sm font-bold text-stone-800">Alerts for incoming files</p>
+          <label className="flex items-center justify-between gap-4 text-sm text-stone-700 cursor-pointer">
+            <span>Play a sound</span>
+            <input type="checkbox" checked={alertPrefs.sound} onChange={(e) => setAlertPrefsState(setAlertPrefs({ sound: e.target.checked }))} className="w-5 h-5 accent-indigo-600 cursor-pointer" />
+          </label>
+          <label className="flex items-center justify-between gap-4 text-sm text-stone-700 cursor-pointer">
+            <span>Vibrate (phones)</span>
+            <input type="checkbox" checked={alertPrefs.vibrate} onChange={(e) => setAlertPrefsState(setAlertPrefs({ vibrate: e.target.checked }))} className="w-5 h-5 accent-indigo-600 cursor-pointer" />
+          </label>
+          <div className="flex items-center justify-between gap-4 text-sm text-stone-700">
+            <span>Notifications while this tab is in the background</span>
+            {notifState === 'granted' ? (
+              <label className="inline-flex items-center gap-2 cursor-pointer">
+                <Bell className="w-4 h-4 text-emerald-600" />
+                <input type="checkbox" checked={alertPrefs.notify} onChange={(e) => setAlertPrefsState(setAlertPrefs({ notify: e.target.checked }))} className="w-5 h-5 accent-indigo-600 cursor-pointer" />
+              </label>
+            ) : notifState === 'denied' ? (
+              <span className="inline-flex items-center gap-1.5 text-xs text-stone-500"><BellOff className="w-4 h-4" />Blocked in browser settings</span>
+            ) : notifState === 'unsupported' ? (
+              <span className="text-xs text-stone-500">Not supported here</span>
+            ) : (
+              <button type="button" onClick={async () => setNotifState(await enableNotifications())} className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-bold cursor-pointer">Turn on</button>
+            )}
+          </div>
+        </div>
 
         <DeviceList title="Trusted devices" empty="None yet. Accepting with “Always accept” adds a device here." ids={settings.trusted} actionLabel="Remove" onAction={(id) => run(`u${id}`, () => dev.updateSettings({ untrust: id }))} />
         <DeviceList title="Blocked devices" empty="No blocked devices." ids={settings.blocked} actionLabel="Unblock" onAction={(id) => run(`b${id}`, () => dev.updateSettings({ unblock: id }))} />
@@ -545,7 +817,7 @@ const StatusPill: React.FC<{ status: string }> = ({ status }) => {
   return <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-md border ${map[status] || map.removed}`}>{label[status] || status}</span>;
 };
 
-const SendRow: React.FC<{ job: SendJob }> = ({ job }) => {
+const SendRow: React.FC<{ job: SendJob; onCancel: () => void }> = ({ job, onCancel }) => {
   const statusText: Record<SendJob['status'], string> = {
     queued: 'Queued',
     waiting: 'Waiting for them to accept…',
@@ -570,6 +842,12 @@ const SendRow: React.FC<{ job: SendJob }> = ({ job }) => {
       <p className={`text-[11px] ${failed ? 'text-red-600' : 'text-stone-500'}`}>
         {statusText[job.status]} {job.toName ? <span className="text-stone-400">• {job.toName}</span> : null}
         {(job.status === 'sending' || job.status === 'done') && <span className="text-stone-400"> • {formatBytes(job.size)}</span>}
+        {job.status === 'sending' && job.speed ? (
+          <span className="text-stone-400"> • {formatBytes(job.speed)}/s{job.eta !== undefined ? ` • ${formatEta(job.eta)} left` : ''}</span>
+        ) : null}
+        {(job.status === 'queued' || job.status === 'sending') && (
+          <button type="button" onClick={onCancel} className="ml-2 font-bold text-red-600 hover:text-red-700 cursor-pointer">Cancel</button>
+        )}
       </p>
     </div>
   );
