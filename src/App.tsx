@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Header } from './components/Header';
+import { Header, NavSection } from './components/Header';
+import { MobileNav } from './components/MobileNav';
 import { UploadDropzone } from './components/UploadDropzone';
 import { PublishPanel } from './components/PublishPanel';
 import { MultiPublishPanel } from './components/MultiPublishPanel';
@@ -10,22 +11,11 @@ import { IncomingTransferModal } from './components/IncomingTransferModal';
 import { SignInPage } from './components/SignInPage';
 import { useAuth } from './context/AuthContext';
 import { startServerKeepAlive } from './lib/api';
+import { navigateToDevices } from './lib/nav';
 import { Logo } from './components/Logo';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { UploadResponse } from './types';
-import {
-  FileText,
-  Shield,
-  Zap,
-  Globe,
-  Clock,
-  Lock,
-  Eye,
-  CheckCircle2,
-  Sparkles,
-  Link as LinkIcon,
-  Files,
-} from 'lucide-react';
+import { Zap, Lock, Eye, Smartphone, ArrowRight } from 'lucide-react';
 import { uploadFile, uploadBundle, uploadMultipleSeparate } from './lib/api';
 
 export default function App() {
@@ -322,8 +312,16 @@ export default function App() {
     return <SignInPage onDone={isSignInRoute ? navigateHome : () => {}} />;
   }
 
+  const activeSection: NavSection = isDevicesRoute
+    ? 'devices'
+    : isDocumentsRoute
+    ? 'documents'
+    : currentSlug
+    ? null
+    : 'home';
+
   return (
-    <div className="min-h-screen flex flex-col bg-stone-50 text-stone-900 selection:bg-indigo-500 selection:text-white">
+    <div className="min-h-screen flex flex-col bg-stone-50 text-stone-900 selection:bg-indigo-500 selection:text-white pb-20 md:pb-0">
       {/* Incoming direct transfers (prompts + progress) */}
       <IncomingTransferModal />
 
@@ -333,6 +331,7 @@ export default function App() {
         onOpenMyDocuments={navigateToDocuments}
         onNavigateToSlug={navigateToSlug}
         currentSlug={currentSlug}
+        active={activeSection}
       />
 
       {/* Main Content Area */}
@@ -365,119 +364,110 @@ export default function App() {
             </div>
           ) : (
             /* 4. Upload & Landing View */
-            <div className="max-w-4xl mx-auto px-4 sm:px-6 w-full space-y-12">
-              {/* Hero Heading */}
-              <div className="text-center space-y-3">
-                <div className="inline-flex items-center space-x-2 px-3.5 py-1.5 bg-stone-200/80 border border-stone-300/90 rounded-full text-xs font-semibold text-stone-800 shadow-2xs">
+            <div className="max-w-4xl mx-auto px-4 sm:px-6 w-full space-y-8 sm:space-y-10">
+              {/* Hero */}
+              <div className="text-center space-y-4 pt-2">
+                <div className="inline-flex items-center space-x-2 px-3.5 py-1.5 bg-white border border-stone-200 rounded-full text-xs font-semibold text-stone-700 shadow-2xs">
                   <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-                  <span>MakeTransfer Platform</span>
+                  <span>Free to use · recipients never need an account</span>
                 </div>
-                <h1 className="text-3xl sm:text-5xl font-extrabold text-stone-900 tracking-tight max-w-2xl mx-auto leading-tight">
-                  Share any document in seconds with a unique link
+                <h1 className="text-[2rem] leading-[1.1] sm:text-5xl font-extrabold text-stone-900 tracking-tight max-w-2xl mx-auto">
+                  Share any file with{' '}
+                  <span className="bg-gradient-to-r from-indigo-600 via-violet-600 to-pink-600 bg-clip-text text-transparent">one simple link</span>
                 </h1>
-                <p className="text-sm sm:text-base text-stone-600 max-w-xl mx-auto leading-relaxed">
-                  Upload PDFs, Word documents, Spreadsheets, Images, Code, or Archives.
-                  Recipients view documents directly in their browser without signing up.
+                <p className="text-[15px] sm:text-base text-stone-600 max-w-xl mx-auto leading-relaxed">
+                  Upload PDFs, Word and Excel files, images, code or whole folders. People open them right in their browser.
                 </p>
               </div>
 
-            {/* Drag & Drop Upload Zone */}
-            <UploadDropzone
-              onUploadSuccess={handleUploadSuccess}
-              onMultiUploadSuccess={handleMultiUploadSuccess}
-            />
+              {/* Upload zone */}
+              <UploadDropzone
+                onUploadSuccess={handleUploadSuccess}
+                onMultiUploadSuccess={handleMultiUploadSuccess}
+              />
 
-            {/* Quick Demo Sample Files */}
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-2 pt-2 text-xs text-stone-500">
-              <span className="text-stone-400">Or try with an instant sample:</span>
-              <div className="flex flex-wrap items-center justify-center gap-2">
-                <button
-                  disabled={sampleLoading}
-                  onClick={() => handleUploadSample('multiple')}
-                  className="px-2.5 py-1 bg-emerald-50 hover:bg-emerald-100 border border-emerald-300 text-emerald-900 rounded-lg font-semibold transition-colors cursor-pointer"
-                  title="Upload 3 files with separate links"
-                >
-                  🔗 3 Files (Different Links)
-                </button>
-                <button
-                  disabled={sampleLoading}
-                  onClick={() => handleUploadSample('folder')}
-                  className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 border border-amber-300 text-amber-900 rounded-lg font-semibold transition-colors cursor-pointer"
-                >
-                  📁 Project Folder (1 Bundle Link)
-                </button>
-                <button
-                  disabled={sampleLoading}
-                  onClick={() => handleUploadSample('markdown')}
-                  className="px-2.5 py-1 bg-white hover:bg-stone-100 border border-stone-300 rounded-lg text-stone-700 font-medium transition-colors cursor-pointer"
-                >
-                  📝 Markdown Doc
-                </button>
-                <button
-                  disabled={sampleLoading}
-                  onClick={() => handleUploadSample('csv')}
-                  className="px-2.5 py-1 bg-white hover:bg-stone-100 border border-stone-300 rounded-lg text-stone-700 font-medium transition-colors cursor-pointer"
-                >
-                  📊 Spreadsheet (.csv)
-                </button>
+              {/* Send to a device */}
+              <button
+                type="button"
+                onClick={() => navigateToDevices()}
+                className="group w-full text-left bg-white border border-stone-200 hover:border-indigo-300 hover:shadow-md rounded-2xl p-4 sm:p-5 flex items-center gap-4 transition-all cursor-pointer"
+              >
+                <span className="w-12 h-12 rounded-2xl bg-gradient-to-br from-indigo-600 via-violet-600 to-pink-600 text-white flex items-center justify-center shrink-0 shadow-md shadow-indigo-500/20">
+                  <Smartphone className="w-6 h-6" />
+                </span>
+                <span className="flex-1 min-w-0">
+                  <span className="block text-sm sm:text-base font-bold text-stone-900">Sending to another phone or PC?</span>
+                  <span className="block text-xs sm:text-sm text-stone-500 mt-0.5">Use a device ID to send files directly, with no link to share.</span>
+                </span>
+                <ArrowRight className="w-5 h-5 text-stone-400 group-hover:text-indigo-600 group-hover:translate-x-0.5 transition-all shrink-0" />
+              </button>
+
+              {/* Samples */}
+              <div className="space-y-2">
+                <p className="text-center text-xs font-semibold text-stone-400">Just exploring? Try a sample</p>
+                <div className="flex sm:flex-wrap sm:justify-center gap-2 overflow-x-auto -mx-4 px-4 sm:mx-0 sm:px-0 pb-1 [scrollbar-width:none]">
+                  {[
+                    { k: 'multiple', label: '🔗 3 files, separate links', cls: 'bg-emerald-50 hover:bg-emerald-100 border-emerald-200 text-emerald-900' },
+                    { k: 'folder', label: '📁 Project folder', cls: 'bg-amber-50 hover:bg-amber-100 border-amber-200 text-amber-900' },
+                    { k: 'markdown', label: '📝 Markdown', cls: 'bg-white hover:bg-stone-100 border-stone-200 text-stone-700' },
+                    { k: 'csv', label: '📊 Spreadsheet', cls: 'bg-white hover:bg-stone-100 border-stone-200 text-stone-700' },
+                  ].map((s) => (
+                    <button
+                      key={s.k}
+                      disabled={sampleLoading}
+                      onClick={() => handleUploadSample(s.k as any)}
+                      className={`shrink-0 whitespace-nowrap px-3.5 py-2 border rounded-full text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50 ${s.cls}`}
+                    >
+                      {s.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Highlights */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-5 pt-2">
+                {[
+                  { icon: Eye, tint: 'from-indigo-500 to-indigo-600', title: 'Preview in the browser', text: 'PDF, Word, Excel, Markdown, code and images open without any extra software.' },
+                  { icon: Lock, tint: 'from-violet-500 to-violet-600', title: 'Passwords and expiry', text: 'Protect files with a password, an expiry date or a download limit.' },
+                  { icon: Zap, tint: 'from-pink-500 to-pink-600', title: 'Short links and QR codes', text: 'Clean links, instant QR codes and view and download counts for every file.' },
+                ].map(({ icon: Icon, tint, title, text }) => (
+                  <div key={title} className="bg-white p-5 rounded-2xl border border-stone-200/80 shadow-2xs flex sm:block items-start gap-4">
+                    <span className={`w-10 h-10 shrink-0 rounded-xl bg-gradient-to-br ${tint} text-white flex items-center justify-center sm:mb-3 shadow-sm`}>
+                      <Icon className="w-5 h-5" />
+                    </span>
+                    <span className="block">
+                      <h3 className="font-bold text-sm text-stone-900">{title}</h3>
+                      <p className="text-xs text-stone-500 leading-relaxed mt-1">{text}</p>
+                    </span>
+                  </div>
+                ))}
               </div>
             </div>
-
-            {/* Feature Highlights Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6 pt-6 border-t border-stone-200/80">
-              <div className="bg-white p-6 rounded-2xl border border-stone-200/80 shadow-2xs space-y-2">
-                <div className="w-10 h-10 rounded-xl bg-stone-100 flex items-center justify-center text-stone-800 mb-3">
-                  <Eye className="w-5 h-5" />
-                </div>
-                <h3 className="font-bold text-sm text-stone-900">Rich In-Browser Previews</h3>
-                <p className="text-xs text-stone-500 leading-relaxed">
-                  Interactive viewers for PDFs, Word DOCX, Excel spreadsheets, Markdown tables, code, and images without external software.
-                </p>
-              </div>
-
-              <div className="bg-white p-6 rounded-2xl border border-stone-200/80 shadow-2xs space-y-2">
-                <div className="w-10 h-10 rounded-xl bg-stone-100 flex items-center justify-center text-stone-800 mb-3">
-                  <Lock className="w-5 h-5" />
-                </div>
-                <h3 className="font-bold text-sm text-stone-900">Passkeys & Expiration</h3>
-                <p className="text-xs text-stone-500 leading-relaxed">
-                  Lock sensitive files with optional passwords, self-destructing links, and maximum download caps.
-                </p>
-              </div>
-
-              <div className="bg-white p-6 rounded-2xl border border-stone-200/80 shadow-2xs space-y-2">
-                <div className="w-10 h-10 rounded-xl bg-stone-100 flex items-center justify-center text-stone-800 mb-3">
-                  <Zap className="w-5 h-5" />
-                </div>
-                <h3 className="font-bold text-sm text-stone-900">Collision-Safe Links</h3>
-                <p className="text-xs text-stone-500 leading-relaxed">
-                  Clean short URLs, QR Code generation, and real-time view and download analytics for every link.
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
+          )}
         </ErrorBoundary>
       </main>
 
       {/* Footer */}
-      <footer className="border-t border-stone-200/80 bg-white/80 py-6 text-center text-xs text-stone-500">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="flex flex-col sm:flex-row items-center gap-2.5">
-            <div className="flex items-center space-x-2">
-              <div className="w-5 h-5 rounded-md bg-gradient-to-br from-indigo-600 via-violet-600 to-pink-600 flex items-center justify-center text-white p-0.5 shadow-2xs">
-                <Logo className="w-full h-full text-white" />
-              </div>
-              <p className="font-semibold text-stone-800">
-                MakeTransfer — Frictionless, Open Document Sharing
-              </p>
-            </div>
+      <footer className="border-t border-stone-200/80 bg-white/70 py-6 text-xs text-stone-500">
+        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-center sm:text-left">
+          <div className="flex items-center space-x-2">
+            <span className="w-6 h-6 rounded-md bg-gradient-to-br from-indigo-600 via-violet-600 to-pink-600 flex items-center justify-center text-white p-1 shadow-2xs">
+              <Logo className="w-full h-full text-white" />
+            </span>
+            <span className="font-semibold text-stone-700">MakeTransfer</span>
+            <span className="text-stone-400">· Simple, private file sharing</span>
           </div>
-          <p className="text-stone-400">
-            Files stored securely • Single bundle or individual links
-          </p>
+          <p className="text-stone-400">Single link, bundle or direct to a device</p>
         </div>
       </footer>
+
+      {/* Bottom tab bar (phones) */}
+      <MobileNav
+        active={activeSection}
+        onHome={navigateHome}
+        onDocuments={navigateToDocuments}
+        onDevices={() => navigateToDevices()}
+      />
     </div>
   );
 }

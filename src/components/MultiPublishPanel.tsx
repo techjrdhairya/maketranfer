@@ -33,7 +33,6 @@ import {
   Shield,
   FileCheck,
   Download,
-  Monitor,
 } from 'lucide-react';
 import { DocumentMetadata, PublishRequest, UploadResponse } from '../types';
 import {
@@ -47,7 +46,6 @@ import {
   getEffectiveBaseUrl,
 } from '../lib/api';
 import { formatBytes, getFileCategoryColor } from '../lib/format';
-import { DeviceAccessModal } from './DeviceAccessModal';
 
 interface ItemConfig {
   customSlug: string;
@@ -138,8 +136,6 @@ export const MultiPublishPanel: React.FC<MultiPublishPanelProps> = ({
 
   // General state
   const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null);
-  const [isDeviceModalOpen, setIsDeviceModalOpen] = useState(false);
-  const [activeDeviceSlug, setActiveDeviceSlug] = useState<string | null>(null);
 
   useEffect(() => {
     getServerInfo().then((info) => {
@@ -602,19 +598,6 @@ export const MultiPublishPanel: React.FC<MultiPublishPanelProps> = ({
           </div>
 
           <div className="flex items-center space-x-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => {
-                setActiveDeviceSlug(null);
-                setIsDeviceModalOpen(true);
-              }}
-              className="flex items-center space-x-1.5 px-3.5 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl font-bold text-xs transition-colors cursor-pointer"
-              title="Open on desktop CPU, monitor, ethernet, or phone"
-            >
-              <Monitor className="w-4 h-4 text-emerald-400" />
-              <span>Desktop / Devices</span>
-            </button>
-
             <button
               onClick={handleCopyAll}
               className="flex items-center space-x-2 px-5 py-2.5 bg-white text-stone-900 hover:bg-stone-100 rounded-xl font-bold text-xs shadow-xs transition-all cursor-pointer shrink-0"
@@ -1252,12 +1235,6 @@ export const MultiPublishPanel: React.FC<MultiPublishPanelProps> = ({
         </div>
       )}
 
-      {/* Cross-Device / Desktop CPU Monitor Access Guide Modal */}
-      <DeviceAccessModal
-        isOpen={isDeviceModalOpen}
-        onClose={() => setIsDeviceModalOpen(false)}
-        documentSlug={activeDeviceSlug}
-      />
     </div>
   );
 };

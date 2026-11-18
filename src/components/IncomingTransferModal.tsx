@@ -66,7 +66,7 @@ export const IncomingTransferModal: React.FC = () => {
       )}
 
       {receives.length > 0 && (
-        <div className="fixed bottom-4 right-4 z-[65] w-[min(22rem,calc(100vw-2rem))] space-y-2">
+        <div className="fixed bottom-24 md:bottom-4 right-4 z-[65] w-[min(22rem,calc(100vw-2rem))] space-y-2">
           {receives.map((r) => (
             <div key={r.tid} className="bg-white border border-stone-200 rounded-2xl shadow-xl p-4 space-y-2">
               <div className="flex items-center justify-between gap-2 text-xs">

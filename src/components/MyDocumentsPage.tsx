@@ -845,7 +845,7 @@ export const MyDocumentsPage: React.FC<MyDocumentsPageProps> = ({ onOpenDocument
       {toast && (
         <div
           role="status"
-          className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] max-w-[92vw] px-4 py-3 rounded-xl text-sm font-semibold shadow-xl flex items-center space-x-2 ${
+          className={`fixed bottom-24 md:bottom-6 left-1/2 -translate-x-1/2 z-[60] max-w-[92vw] px-4 py-3 rounded-xl text-sm font-semibold shadow-xl flex items-center space-x-2 ${
             toast.type === 'ok' ? 'bg-stone-900 text-white' : 'bg-red-600 text-white'
           }`}
         >

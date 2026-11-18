@@ -520,7 +520,7 @@ export const DevicesPage: React.FC<DevicesPageProps> = ({ onBack }) => {
       </section>
 
       {toast && (
-        <div role="status" className={`fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] max-w-[92vw] px-4 py-3 rounded-xl text-sm font-semibold shadow-xl flex items-center space-x-2 ${toast.type === 'ok' ? 'bg-stone-900 text-white' : 'bg-red-600 text-white'}`}>
+        <div role="status" className={`fixed bottom-24 md:bottom-6 left-1/2 -translate-x-1/2 z-[60] max-w-[92vw] px-4 py-3 rounded-xl text-sm font-semibold shadow-xl flex items-center space-x-2 ${toast.type === 'ok' ? 'bg-stone-900 text-white' : 'bg-red-600 text-white'}`}>
           {toast.type === 'ok' ? <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" /> : <AlertTriangle className="w-4 h-4 shrink-0" />}
           <span>{toast.text}</span>
         </div>

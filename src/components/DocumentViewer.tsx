@@ -15,7 +15,6 @@ import {
   Copy,
   Sparkles,
   Loader2,
-  Monitor,
 } from 'lucide-react';
 import { DocumentMetadata } from '../types';
 import { getDocumentMetadata, getAccessToken, getServerInfo, ServerInfo, getEffectiveBaseUrl } from '../lib/api';
@@ -32,7 +31,6 @@ import { FolderViewer } from './viewers/FolderViewer';
 import { PasswordPrompt } from './PasswordPrompt';
 import { ExpiredNotice } from './ExpiredNotice';
 import { Logo } from './Logo';
-import { DeviceAccessModal } from './DeviceAccessModal';
 
 interface DocumentViewerProps {
   slug: string;
@@ -49,7 +47,6 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ slug, onGoHome }
   const [copiedLink, setCopiedLink] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
   const [serverInfo, setServerInfo] = useState<ServerInfo | null>(null);
-  const [isDeviceModalOpen, setIsDeviceModalOpen] = useState(false);
 
   useEffect(() => {
     getServerInfo().then((info) => {
@@ -200,15 +197,6 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ slug, onGoHome }
 
         <div className="flex items-center space-x-2.5">
           <button
-            onClick={() => setIsDeviceModalOpen(true)}
-            title="Open on desktop CPU, monitor, ethernet, or other devices"
-            className="flex items-center space-x-1.5 px-3 py-1.5 bg-stone-100 hover:bg-stone-200/80 text-stone-700 rounded-xl text-xs font-semibold transition-colors cursor-pointer"
-          >
-            <Monitor className="w-3.5 h-3.5 text-emerald-700" />
-            <span className="hidden sm:inline">Desktop Guide</span>
-          </button>
-
-          <button
             onClick={handleCopyLink}
             className="flex items-center space-x-1.5 px-3 py-1.5 bg-white border border-stone-300 hover:bg-stone-50 text-stone-700 rounded-xl text-xs font-medium transition-colors shadow-2xs"
           >
@@ -329,13 +317,6 @@ export const DocumentViewer: React.FC<DocumentViewerProps> = ({ slug, onGoHome }
         </button>
       </div>
 
-      {/* Cross-Device / Desktop CPU Monitor Access Modal */}
-      <DeviceAccessModal
-        isOpen={isDeviceModalOpen}
-        onClose={() => setIsDeviceModalOpen(false)}
-        documentSlug={slug}
-        documentTitle={doc.folderName || doc.originalFilename}
-      />
     </div>
   );
 };
