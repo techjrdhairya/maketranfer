@@ -131,11 +131,14 @@ export const DevicesPage: React.FC<DevicesPageProps> = ({ onBack }) => {
   }, [target]);
 
   const addFiles = (list: FileList | File[] | null) => {
-    if (!list || (Array.isArray(list) ? list.length === 0 : (list as FileList).length === 0)) return;
+    // Copy right away: a FileList from <input>/drop is "live" and is emptied as soon as the input is reset,
+    // which happens before React runs the state updater below.
+    const picked = list ? Array.from(list) : [];
+    if (picked.length === 0) return;
     if (isCompleteDeviceId(target)) autoSend.current = true;
     setFiles((prev) => {
       const next = [...prev];
-      for (const f of Array.from(list)) {
+      for (const f of picked) {
         if (!next.some((x) => x.name === f.name && x.size === f.size && x.lastModified === f.lastModified)) next.push(f);
       }
       return next;
